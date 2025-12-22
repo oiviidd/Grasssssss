@@ -42,7 +42,7 @@
             GraduationCap, BarChart2, Timer, BookOpen, PenTool, Flag, Cloud, CloudOff, Database
         } from 'lucide-react';
         
-        // --- JALAALI CONVERSION FUNCTIONS (Compact) ---
+        // --- JALAALI CONVERSION FUNCTIONS ---
         function g2j(gy, gm, gd) {
             var g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
             var gy2 = (gm > 2) ? (gy + 1) : gy;
@@ -91,16 +91,15 @@
         const calculateDefaultEvents = () => {
             const now = new Date();
             const jNow = dateToShamsi(now);
-            // Default to current Persian year
             let targetYear = jNow.jy;
             
-            // 17 Dey (Month 10)
+            // 17 Dey
             const startG = j2g(targetYear, 10, 17);
-            const startDate = new Date(startG.gy, startG.gm - 1, startG.gd, 8, 0); // 08:00 AM
+            const startDate = new Date(startG.gy, startG.gm - 1, startG.gd, 8, 0); 
             
-            // 27 Dey (Month 10)
+            // 27 Dey
             const endG = j2g(targetYear, 10, 27);
-            const endDate = new Date(endG.gy, endG.gm - 1, endG.gd, 12, 0); // 12:00 PM
+            const endDate = new Date(endG.gy, endG.gm - 1, endG.gd, 12, 0);
 
             return [
                 { id: 'e1', title: 'شروع امتحانات (۱۷ دی)', date: startDate.toISOString().slice(0, 16), type: 'exam_start' },
@@ -113,7 +112,7 @@
             daily: [
                 { id: 'q1', text: 'تمرکز عمیق (۳ ساعت مطالعه)', xp: 50, type: 'study', time: '09:00 - 13:30', desc: 'موبایل سایلنت...' },
                 { id: 'q2', text: '۲۰ دقیقه طلایی (کمر + اتاق)', xp: 40, type: 'health', time: '13:50 - 14:10', crucial: true, desc: 'حرکات اصلاحی...' },
-                { id: 'q3', text: 'کار فریلنسری / پورتفولیو', xp: 40, type: 'work', time: '15:00 - 19:00', desc: 'کار روی پروژه‌ها...' },
+                { id: 'q3', text: 'کار فریلنسری / پورتفولیو', xp: 40, type: 'work', time: '15:00 - 19:00', desc: 'کار روی پروژه‌های...' },
                 { id: 'q4', text: 'باشگاه / سوشال لایف', xp: 50, type: 'social', time: '19:00+', desc: 'روزهای زوج باشگاه...' },
                 { id: 'q5', text: 'خواب ساعت ۱ بامداد', xp: 20, type: 'health', time: '01:00', desc: 'گوشی کنار...' }
             ],
@@ -137,26 +136,22 @@
 
         // --- COMPONENTS ---
         const ShamsiDateInput = ({ value, onChange, label }) => {
-            // Internal state for shamsi parts
             const [jParts, setJParts] = useState({ y: '', m: '', d: '', h: '', min: '' });
 
             useEffect(() => {
-                if (value) {
-                    const d = new Date(value);
-                    const j = dateToShamsi(d);
-                    setJParts({
-                        y: j.jy, m: j.jm, d: j.jd,
-                        h: d.getHours().toString().padStart(2,'0'),
-                        min: d.getMinutes().toString().padStart(2,'0')
-                    });
-                }
+                const d = value ? new Date(value) : new Date(); // Default to Now if empty
+                const j = dateToShamsi(d);
+                setJParts({
+                    y: j.jy, m: j.jm, d: j.jd,
+                    h: d.getHours().toString().padStart(2,'0'),
+                    min: d.getMinutes().toString().padStart(2,'0')
+                });
             }, [value]);
 
             const handleChange = (part, val) => {
                 const newParts = { ...jParts, [part]: parseInt(val) || 0 };
-                setJParts(prev => ({ ...prev, [part]: val })); // update UI
+                setJParts(prev => ({ ...prev, [part]: val })); 
                 
-                // If valid, trigger onChange with ISO string
                 if (newParts.y > 1300 && newParts.m > 0 && newParts.d > 0) {
                     const g = j2g(newParts.y, newParts.m, newParts.d);
                     const gDate = new Date(g.gy, g.gm - 1, g.gd, newParts.h, newParts.min);
@@ -245,7 +240,7 @@
                 return saved ? JSON.parse(saved) : {
                     quests: INITIAL_DATA, xp: 0, xpHistory: [], level: 1, completedTasks: {}, dailyNote: '', streak: 0, lastLoginDate: '',
                     planStartDateStr: `${new Date().getFullYear()}-12-21T00:00:00`,
-                    customEvents: calculateDefaultEvents() // Calculated 17 Dey & 27 Dey
+                    customEvents: calculateDefaultEvents()
                 };
             });
 
@@ -254,7 +249,8 @@
             
             const [newQuestType, setNewQuestType] = useState('daily');
             const [newQuestData, setNewQuestData] = useState({ text: '', desc: '', xp: 50 });
-            const [newEventData, setNewEventData] = useState({ title: '', date: '' });
+            // FIX: Initialize newEventData with current date so validation passes
+            const [newEventData, setNewEventData] = useState({ title: '', date: new Date().toISOString() });
             const [tempSyncConfig, setTempSyncConfig] = useState(syncConfig);
 
             useEffect(() => { setLoading(false); }, []);
@@ -419,10 +415,10 @@
                                 React.createElement("button", { onClick: ()=> { if(confirm('حذف؟')) setState(p=>({...p, customEvents: p.customEvents.filter(x=>x.id!==e.id)})) }, className: "text-red-500" }, React.createElement(Trash2, {className:"w-4 h-4"}))
                             )),
                             React.createElement("div", { className: "flex flex-col gap-2 mb-2" },
-                                React.createElement("input", { type: "text", placeholder: "عنوان", className: "w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white", value: newEventData.title, onChange: e=>setNewEventData({...newEventData, title: e.target.value}) }),
+                                React.createElement("input", { type: "text", placeholder: "عنوان", className: "w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white", value: newEventData.title, onChange: e=>setNewEventData(prev => ({...prev, title: e.target.value})) }),
                                 React.createElement(ShamsiDateInput, { value: newEventData.date, onChange: iso=>setNewEventData(prev=>({...prev, date:iso})) })
                             ),
-                            React.createElement("button", { className: "w-full bg-indigo-600/50 border border-indigo-500 text-indigo-200 py-2 rounded text-sm", onClick: ()=>{ if(!newEventData.title || !newEventData.date) return alert('خطا'); setState(p=>({...p, customEvents: [...p.customEvents, {id:`e_${Date.now()}`, ...newEventData}]})); setNewEventData({title:'',date:''}); } }, "افزودن رویداد")
+                            React.createElement("button", { className: "w-full bg-indigo-600/50 border border-indigo-500 text-indigo-200 py-2 rounded text-sm", onClick: ()=>{ if(!newEventData.title || !newEventData.date) return alert('لطفا عنوان و تاریخ را وارد کنید'); setState(p=>({...p, customEvents: [...p.customEvents, {id:`e_${Date.now()}`, ...newEventData}]})); setNewEventData({title:'',date: new Date().toISOString()}); } }, "افزودن رویداد")
                         ),
 
                         React.createElement("div", { className: "mb-6 p-4 bg-gray-900 rounded border border-gray-700" },
