@@ -4,17 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Life RPG Planner</title>
-    <!-- اضافه کردن فونت وزیرمتن -->
+    <!-- فونت وزیرمتن -->
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
-    <!-- اضافه کردن Tailwind CSS برای استایل -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Vazirmatn', sans-serif; background-color: #111827; color: white; }
-        /* انیمیشن‌های ساده */
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        /* استایل اختصاصی برای اعداد فارسی در ورودی‌ها */
+        input[type="number"] { -moz-appearance: textfield; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     </style>
-    <!-- تنظیمات ایمپورت ماژول‌ها برای مرورگر -->
     <script type="importmap">
     {
       "imports": {
@@ -41,20 +42,72 @@
             GraduationCap, BarChart2, Timer, BookOpen, PenTool, Flag, Cloud, CloudOff, Database
         } from 'lucide-react';
         
-        import { initializeApp } from 'firebase/app';
-        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-        import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+        // --- JALAALI CONVERSION FUNCTIONS (Compact) ---
+        function g2j(gy, gm, gd) {
+            var g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+            var gy2 = (gm > 2) ? (gy + 1) : gy;
+            var days = 355666 + (365 * gy) + ~~((gy2 + 3) / 4) - ~~((gy2 + 99) / 100) + ~~((gy2 + 399) / 400) + gd + g_d_m[gm - 1];
+            var jy = -1595 + (33 * ~~(days / 12053));
+            days %= 12053;
+            jy += 4 * ~~(days / 1461);
+            days %= 1461;
+            if (days > 365) { jy += ~~((days - 1) / 365); days = (days - 1) % 365; }
+            var jm, jd;
+            if (days < 186) { jm = 1 + ~~(days / 31); jd = 1 + (days % 31); } 
+            else { jm = 7 + ~~((days - 186) / 30); jd = 1 + ((days - 186) % 30); }
+            return { jy: jy, jm: jm, jd: jd };
+        }
+
+        function j2g(jy, jm, jd) {
+            var gy, gm, gd, days;
+            jy += 1595;
+            days = -355668 + (365 * jy) + (~~(jy / 33) * 8) + ~~(((jy % 33) + 3) / 4) + jd + ((jm < 7) ? (jm - 1) * 31 : ((jm - 7) * 30) + 186);
+            gy = 400 * ~~(days / 146097);
+            days %= 146097;
+            if (days > 36524) { gy += 100 * ~~(--days / 36524); days %= 36524; if (days >= 365) days++; }
+            gy += 4 * ~~(days / 1461);
+            days %= 1461;
+            if (days > 365) { gy += ~~((days - 1) / 365); days = (days - 1) % 365; }
+            gd = days + 1;
+            var sal_a = [0, 31, ((gy % 4 === 0 && gy % 100 !== 0) || (gy % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            for (gm = 0; gm < 13 && gd > sal_a[gm]; gm++) gd -= sal_a[gm];
+            return { gy: gy, gm: gm, gd: gd };
+        }
+
+        const dateToShamsi = (date) => g2j(date.getFullYear(), date.getMonth() + 1, date.getDate());
+        const getShamsiString = (dateStr) => {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            const j = dateToShamsi(d);
+            const time = d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+            return `${j.jy}/${j.jm}/${j.jd} - ${time}`;
+        };
 
         // --- HELPER FUNCTIONS ---
         const generateId = () => Math.random().toString(36).substr(2, 9);
         const getIranDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tehran" }));
-        const getShamsiDate = () => new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
-        const formatEventDate = (dateString) => {
-            if (!dateString) return '';
-            return new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(dateString));
+        
+        // Calculate Default Exam Dates (17 Dey & 27 Dey)
+        const calculateDefaultEvents = () => {
+            const now = new Date();
+            const jNow = dateToShamsi(now);
+            // Default to current Persian year
+            let targetYear = jNow.jy;
+            
+            // 17 Dey (Month 10)
+            const startG = j2g(targetYear, 10, 17);
+            const startDate = new Date(startG.gy, startG.gm - 1, startG.gd, 8, 0); // 08:00 AM
+            
+            // 27 Dey (Month 10)
+            const endG = j2g(targetYear, 10, 27);
+            const endDate = new Date(endG.gy, endG.gm - 1, endG.gd, 12, 0); // 12:00 PM
+
+            return [
+                { id: 'e1', title: 'شروع امتحانات (۱۷ دی)', date: startDate.toISOString().slice(0, 16), type: 'exam_start' },
+                { id: 'e2', title: 'پایان امتحانات (۲۷ دی)', date: endDate.toISOString().slice(0, 16), type: 'exam_end' }
+            ];
         };
 
-        // --- CONSTANTS ---
         const LEVEL_THRESHOLDS = [0, 500, 1200, 2500, 5000, 10000];
         const INITIAL_DATA = {
             daily: [
@@ -82,7 +135,57 @@
             3: { title: "ماه سوم: تثبیت", subtitle: "فاز ۳: روابط", color: "from-purple-500 to-pink-600", boss: "باس فایت: سوشال لایف", icon: React.createElement(Heart, { className: "w-6 h-6" }) }
         };
 
-        // --- SUB-COMPONENTS ---
+        // --- COMPONENTS ---
+        const ShamsiDateInput = ({ value, onChange, label }) => {
+            // Internal state for shamsi parts
+            const [jParts, setJParts] = useState({ y: '', m: '', d: '', h: '', min: '' });
+
+            useEffect(() => {
+                if (value) {
+                    const d = new Date(value);
+                    const j = dateToShamsi(d);
+                    setJParts({
+                        y: j.jy, m: j.jm, d: j.jd,
+                        h: d.getHours().toString().padStart(2,'0'),
+                        min: d.getMinutes().toString().padStart(2,'0')
+                    });
+                }
+            }, [value]);
+
+            const handleChange = (part, val) => {
+                const newParts = { ...jParts, [part]: parseInt(val) || 0 };
+                setJParts(prev => ({ ...prev, [part]: val })); // update UI
+                
+                // If valid, trigger onChange with ISO string
+                if (newParts.y > 1300 && newParts.m > 0 && newParts.d > 0) {
+                    const g = j2g(newParts.y, newParts.m, newParts.d);
+                    const gDate = new Date(g.gy, g.gm - 1, g.gd, newParts.h, newParts.min);
+                    const iso = new Date(gDate.getTime() - (gDate.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
+                    onChange(iso);
+                }
+            };
+
+            return React.createElement("div", { className: "flex flex-col gap-1 mb-2" },
+                label && React.createElement("span", { className: "text-xs text-gray-400" }, label),
+                React.createElement("div", { className: "flex flex-wrap gap-2 items-center dir-ltr bg-gray-900 border border-gray-700 p-2 rounded" },
+                    React.createElement("div", { className: "flex items-center gap-1" },
+                        React.createElement("span", {className: "text-gray-500 text-xs"}, "ساعت"),
+                        React.createElement("input", { type: "number", className: "w-10 p-1 rounded bg-gray-800 text-white text-center", placeholder: "MM", value: jParts.min, onChange: e=>handleChange('min', e.target.value), max: 59 }),
+                        React.createElement("span", null, ":"),
+                        React.createElement("input", { type: "number", className: "w-10 p-1 rounded bg-gray-800 text-white text-center", placeholder: "HH", value: jParts.h, onChange: e=>handleChange('h', e.target.value), max: 23 })
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-1 border-l border-gray-700 pl-2 ml-2" },
+                        React.createElement("span", {className: "text-gray-500 text-xs"}, "تاریخ"),
+                        React.createElement("input", { type: "number", className: "w-14 p-1 rounded bg-gray-800 text-white text-center", placeholder: "سال", value: jParts.y, onChange: e=>handleChange('y', e.target.value) }),
+                        React.createElement("span", null, "/"),
+                        React.createElement("input", { type: "number", className: "w-10 p-1 rounded bg-gray-800 text-white text-center", placeholder: "ماه", value: jParts.m, onChange: e=>handleChange('m', e.target.value), max: 12 }),
+                        React.createElement("span", null, "/"),
+                        React.createElement("input", { type: "number", className: "w-10 p-1 rounded bg-gray-800 text-white text-center", placeholder: "روز", value: jParts.d, onChange: e=>handleChange('d', e.target.value), max: 31 })
+                    )
+                )
+            );
+        };
+
         const SimpleBarChart = ({ data, maxVal }) => {
             return React.createElement("div", { className: "flex items-end justify-between h-32 gap-2 mt-4" },
                 data.map((item, idx) => {
@@ -119,9 +222,8 @@
             );
         };
 
-        // --- MAIN APP COMPONENT ---
+        // --- MAIN APP ---
         function LifeRPG() {
-            // STATE
             const [loading, setLoading] = useState(true);
             const [activeTab, setActiveTab] = useState('daily');
             const [isEditMode, setIsEditMode] = useState(false);
@@ -143,22 +245,19 @@
                 return saved ? JSON.parse(saved) : {
                     quests: INITIAL_DATA, xp: 0, xpHistory: [], level: 1, completedTasks: {}, dailyNote: '', streak: 0, lastLoginDate: '',
                     planStartDateStr: `${new Date().getFullYear()}-12-21T00:00:00`,
-                    customEvents: [ { id: 'e1', title: 'شروع امتحانات', date: `${new Date().getFullYear() + 1}-01-05T09:00`, type: 'exam_start' }, { id: 'e2', title: 'پایان امتحانات', date: `${new Date().getFullYear() + 1}-01-15T12:00`, type: 'exam_end' } ]
+                    customEvents: calculateDefaultEvents() // Calculated 17 Dey & 27 Dey
                 };
             });
 
             const [planStatus, setPlanStatus] = useState({ currentWeek: 1, currentMonth: 1, dayOfPlan: 1, countdownLabel: '', countdownText: '' });
             const [currentMonthView, setCurrentMonthView] = useState(1);
             
-            // Temporary Inputs
             const [newQuestType, setNewQuestType] = useState('daily');
             const [newQuestData, setNewQuestData] = useState({ text: '', desc: '', xp: 50 });
             const [newEventData, setNewEventData] = useState({ title: '', date: '' });
             const [tempSyncConfig, setTempSyncConfig] = useState(syncConfig);
 
-            // --- EFFECTS ---
             useEffect(() => { setLoading(false); }, []);
-            
             useEffect(() => { localStorage.setItem('rpg_local_data', JSON.stringify(state)); }, [state]);
 
             useEffect(() => {
@@ -167,7 +266,7 @@
                 if (newLevel !== state.level) setState(prev => ({ ...prev, level: newLevel }));
             }, [state.xp]);
 
-            // Sync Logic (Supabase)
+            // Sync Logic
             const syncWithCloud = async (direction = 'push') => {
                 if (!syncConfig.url || !syncConfig.key) return;
                 setSyncStatus('syncing');
@@ -271,7 +370,7 @@
                     React.createElement("div", { className: "max-w-3xl mx-auto" },
                         React.createElement("div", { className: "flex justify-between items-start mb-4" },
                             React.createElement("div", null,
-                                React.createElement("div", { className: "text-sm font-bold text-gray-300 flex items-center gap-2" }, React.createElement(Calendar, {className:"w-4 h-4 text-indigo-400"}), " ", getShamsiDate()),
+                                React.createElement("div", { className: "text-sm font-bold text-gray-300 flex items-center gap-2" }, React.createElement(Calendar, {className:"w-4 h-4 text-indigo-400"}), " ", getShamsiDateString(new Date())),
                                 React.createElement("div", { className: "text-[10px] text-gray-500 mt-1" }, `فاز ${planStatus.currentMonth} | روز ${planStatus.dayOfPlan}`)
                             ),
                             React.createElement("div", { className: "flex gap-2" },
@@ -281,7 +380,6 @@
                                 React.createElement("button", { onClick: ()=>setShowSettings(true), className: "p-2 rounded-lg bg-gray-700 hover:bg-gray-600" }, React.createElement(Settings, {className:"w-5 h-5"}))
                             )
                         ),
-                        // Level Bar
                         React.createElement("div", { className: "flex items-center gap-4" },
                             React.createElement("div", { className: "w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center font-black text-xl border-2 border-indigo-400" }, state.level),
                             React.createElement("div", { className: "flex-1" },
@@ -289,7 +387,6 @@
                                 React.createElement("div", { className: "w-full h-3 bg-gray-900 rounded-full overflow-hidden border border-gray-700" }, React.createElement("div", { style: { width: `${Math.min(100, (state.xp / (LEVEL_THRESHOLDS[state.level]||10000))*100)}%` }, className: "h-full bg-indigo-500 rounded-full transition-all" }))
                             )
                         ),
-                        // Countdown
                         planStatus.countdownLabel && React.createElement("div", { className: `mt-4 border rounded-lg p-3 flex justify-between text-sm ${planStatus.countdownText.includes('دقیقه')?'bg-red-900/20 border-red-500 text-red-200 animate-pulse':'bg-yellow-900/20 border-yellow-500 text-yellow-200'}` },
                             React.createElement("div", { className: "flex gap-2 font-bold" }, React.createElement(Flag, {className:"w-5 h-5"}), ` ${planStatus.countdownLabel}:`),
                             React.createElement("span", { className: "font-mono text-lg" }, planStatus.countdownText)
@@ -297,7 +394,6 @@
                     )
                 ),
                 
-                // Modals
                 showTimer && React.createElement(FocusTimer, { onClose: ()=>setShowTimer(false) }),
                 selectedQuestInfo && React.createElement("div", { className: "fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4", onClick: ()=>setSelectedQuestInfo(null) }, 
                     React.createElement("div", { className: "bg-gray-800 p-6 rounded-2xl max-w-sm" },
@@ -307,25 +403,24 @@
                     )
                 ),
                 
-                // Settings Modal
                 showSettings && React.createElement("div", { className: "fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" },
                     React.createElement("div", { className: "bg-gray-800 rounded-2xl w-full max-w-md p-6 border border-gray-700 max-h-[90vh] overflow-y-auto" },
                         React.createElement("div", { className: "flex justify-between mb-6" }, React.createElement("h2", { className: "text-xl font-bold" }, "تنظیمات"), React.createElement("button", { onClick: ()=>setShowSettings(false) }, React.createElement(X))),
                         
                         React.createElement("div", { className: "mb-6 border-b border-gray-700 pb-4" },
                             React.createElement("label", { className: "text-sm text-gray-400 mb-2 block" }, "تاریخ شروع پلن:"),
-                            React.createElement("input", { type: "date", className: "w-full bg-gray-900 border border-gray-700 rounded p-2 text-white", value: state.planStartDateStr.split('T')[0], onChange: (e)=>setState(p=>({...p, planStartDateStr:`${e.target.value}T00:00:00`})) })
+                            React.createElement(ShamsiDateInput, { value: state.planStartDateStr, onChange: (iso)=>setState(p=>({...p, planStartDateStr: iso})) })
                         ),
                         
                         React.createElement("div", { className: "mb-6 border-b border-gray-700 pb-4" },
                             React.createElement("label", { className: "text-sm text-gray-300 font-bold mb-3 block" }, "رویدادهای مهم"),
                             state.customEvents.map(e => React.createElement("div", { key: e.id, className: "flex justify-between items-center bg-gray-900 p-2 rounded border border-gray-700 text-sm mb-2" },
-                                React.createElement("div", null, React.createElement("div", {className:"text-white"}, e.title), React.createElement("div", {className:"text-xs text-gray-500"}, formatEventDate(e.date))),
+                                React.createElement("div", null, React.createElement("div", {className:"text-white"}, e.title), React.createElement("div", {className:"text-xs text-gray-500"}, getShamsiString(e.date))),
                                 React.createElement("button", { onClick: ()=> { if(confirm('حذف؟')) setState(p=>({...p, customEvents: p.customEvents.filter(x=>x.id!==e.id)})) }, className: "text-red-500" }, React.createElement(Trash2, {className:"w-4 h-4"}))
                             )),
-                            React.createElement("div", { className: "flex gap-2 mb-2" },
-                                React.createElement("input", { type: "text", placeholder: "عنوان", className: "flex-[2] bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white", value: newEventData.title, onChange: e=>setNewEventData({...newEventData, title: e.target.value}) }),
-                                React.createElement("input", { type: "datetime-local", className: "flex-[2] bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white ltr", value: newEventData.date, onChange: e=>setNewEventData({...newEventData, date: e.target.value}) })
+                            React.createElement("div", { className: "flex flex-col gap-2 mb-2" },
+                                React.createElement("input", { type: "text", placeholder: "عنوان", className: "w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white", value: newEventData.title, onChange: e=>setNewEventData({...newEventData, title: e.target.value}) }),
+                                React.createElement(ShamsiDateInput, { value: newEventData.date, onChange: iso=>setNewEventData(prev=>({...prev, date:iso})) })
                             ),
                             React.createElement("button", { className: "w-full bg-indigo-600/50 border border-indigo-500 text-indigo-200 py-2 rounded text-sm", onClick: ()=>{ if(!newEventData.title || !newEventData.date) return alert('خطا'); setState(p=>({...p, customEvents: [...p.customEvents, {id:`e_${Date.now()}`, ...newEventData}]})); setNewEventData({title:'',date:''}); } }, "افزودن رویداد")
                         ),
@@ -358,7 +453,6 @@
                     )
                 ),
 
-                // Add Quest Modal
                 showAddModal && React.createElement("div", { className: "fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm" },
                     React.createElement("div", { className: "bg-gray-800 rounded-2xl w-full max-w-md p-6 border border-gray-600" },
                         React.createElement("h3", { className: "text-lg font-bold text-white mb-4" }, "ماموریت جدید"),
@@ -372,7 +466,6 @@
                     )
                 ),
 
-                // Main Content
                 React.createElement("div", { className: "max-w-3xl mx-auto p-4" },
                     isEditMode && React.createElement("div", { className: "bg-yellow-500/10 text-yellow-200 p-3 text-center text-sm rounded-xl mb-4 border border-yellow-500/30" }, "حالت ویرایش فعال است"),
                     
@@ -463,6 +556,13 @@
                 )
             );
         }
+
+        // Helper to format Date for Header
+        const getShamsiDateString = (d) => {
+            const j = dateToShamsi(d);
+            const days = ['یکشنبه','دوشنبه','سه‌شنبه','چهارشنبه','پنج‌شنبه','جمعه','شنبه'];
+            return `${days[d.getDay()]} ${j.jd} / ${j.jm} / ${j.jy}`;
+        };
 
         const root = createRoot(document.getElementById('root'));
         root.render(React.createElement(LifeRPG));
