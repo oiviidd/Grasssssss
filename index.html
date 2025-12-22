@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life RPG Planner</title>
+    <!-- اضافه کردن فونت وزیرمتن -->
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
+    <!-- اضافه کردن Tailwind CSS برای استایل -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Vazirmatn', sans-serif; background-color: #111827; color: white; }
+        /* انیمیشن‌های ساده */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+    </style>
+    <!-- تنظیمات ایمپورت ماژول‌ها برای مرورگر -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Trophy, Target, Calendar, CheckCircle, Activity, Clock, Briefcase, 
+            Heart, Zap, Home, RefreshCw, ChevronLeft, ChevronRight, 
+            Edit3, Trash2, Plus, Save, Settings, X, Info, AlertTriangle, 
+            GraduationCap, BarChart2, Timer, BookOpen, PenTool, Flag, Cloud, CloudOff, Database
+        } from 'lucide-react';
+        
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+
+        // --- HELPER FUNCTIONS ---
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+        const getIranDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tehran" }));
+        const getShamsiDate = () => new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
+        const formatEventDate = (dateString) => {
+            if (!dateString) return '';
+            return new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(dateString));
+        };
+
+        // --- CONSTANTS ---
+        const LEVEL_THRESHOLDS = [0, 500, 1200, 2500, 5000, 10000];
+        const INITIAL_DATA = {
+            daily: [
+                { id: 'q1', text: 'تمرکز عمیق (۳ ساعت مطالعه)', xp: 50, type: 'study', time: '09:00 - 13:30', desc: 'موبایل سایلنت...' },
+                { id: 'q2', text: '۲۰ دقیقه طلایی (کمر + اتاق)', xp: 40, type: 'health', time: '13:50 - 14:10', crucial: true, desc: 'حرکات اصلاحی...' },
+                { id: 'q3', text: 'کار فریلنسری / پورتفولیو', xp: 40, type: 'work', time: '15:00 - 19:00', desc: 'کار روی پروژه‌ها...' },
+                { id: 'q4', text: 'باشگاه / سوشال لایف', xp: 50, type: 'social', time: '19:00+', desc: 'روزهای زوج باشگاه...' },
+                { id: 'q5', text: 'خواب ساعت ۱ بامداد', xp: 20, type: 'health', time: '01:00', desc: 'گوشی کنار...' }
+            ],
+            weekly: [
+                { id: 'w1', text: '۲ جلسه باشگاه', xp: 100, type: 'health', desc: 'حداقل ۲ بار...' },
+                { id: 'w2', text: '۱ ساعت پاکسازی اساسی اتاق', xp: 100, type: 'env', desc: 'جمعه‌ها...' },
+                { id: 'w3', text: 'خروج از منزل (بدون لپ‌تاپ)', xp: 150, type: 'social', desc: 'قانون: بدون لپ‌تاپ...' },
+                { id: 'w4', text: 'بررسی تارگت مالی هفته', xp: 50, type: 'money', desc: 'بررسی درآمد...' }
+            ],
+            monthly: {
+                1: [ { id: 'm1_1', text: 'پاس کردن تمام امتحانات', xp: 500, type: 'boss', desc: 'هدف اصلی...' }, { id: 'm1_2', text: 'دندانپزشکی', xp: 200, desc: 'فقط عکس...' }, { id: 'm1_3', text: 'اتاق قابل سکونت', xp: 300, desc: 'پاکسازی...' } ],
+                2: [ { id: 'm2_1', text: 'درآمد ۱۵۰۰ دلار', xp: 800, type: 'boss', desc: 'تمرکز...' }, { id: 'm2_2', text: 'جراحی دندان عقل', xp: 400, desc: 'جراحی...' }, { id: 'm2_3', text: '۴ ایونت حضوری', xp: 300, desc: 'نتورکینگ...' } ],
+                3: [ { id: 'm3_1', text: '۳ دیت / قرار جدید', xp: 600, type: 'boss', desc: 'تلاش...' }, { id: 'm3_2', text: 'خرید جایزه اتاق', xp: 300, desc: 'خرید...' }, { id: 'm3_3', text: 'تثبیت روتین باشگاه', xp: 300, desc: 'افزایش...' } ]
+            }
+        };
+        const MONTH_THEMES = {
+            1: { title: "ماه اول: بقا", subtitle: "فاز ۱: امتحانات", color: "from-red-500 to-orange-600", boss: "باس فایت: امتحانات", icon: React.createElement(GraduationCap, { className: "w-6 h-6" }) },
+            2: { title: "ماه دوم: حمله", subtitle: "فاز ۲: پول و دندان", color: "from-blue-500 to-indigo-600", boss: "باس فایت: ۱۵۰۰ دلار", icon: React.createElement(Briefcase, { className: "w-6 h-6" }) },
+            3: { title: "ماه سوم: تثبیت", subtitle: "فاز ۳: روابط", color: "from-purple-500 to-pink-600", boss: "باس فایت: سوشال لایف", icon: React.createElement(Heart, { className: "w-6 h-6" }) }
+        };
+
+        // --- SUB-COMPONENTS ---
+        const SimpleBarChart = ({ data, maxVal }) => {
+            return React.createElement("div", { className: "flex items-end justify-between h-32 gap-2 mt-4" },
+                data.map((item, idx) => {
+                    const height = Math.max(10, (item.val / maxVal) * 100);
+                    return React.createElement("div", { key: idx, className: "flex flex-col items-center gap-1 flex-1" },
+                        React.createElement("div", { className: "w-full bg-indigo-500/80 rounded-t-lg transition-all duration-500 hover:bg-indigo-400", style: { height: `${height}%` } }),
+                        React.createElement("span", { className: "text-[10px] text-gray-400" }, item.label)
+                    );
+                })
+            );
+        };
+
+        const FocusTimer = ({ onClose }) => {
+            const [timeLeft, setTimeLeft] = useState(25 * 60);
+            const [isActive, setIsActive] = useState(false);
+            useEffect(() => {
+                let interval = null;
+                if (isActive && timeLeft > 0) interval = setInterval(() => setTimeLeft(t => t - 1), 1000);
+                else if (timeLeft === 0) { setIsActive(false); alert("زمان تمرکز تمام شد!"); }
+                return () => clearInterval(interval);
+            }, [isActive, timeLeft]);
+            const formatTime = (s) => `${Math.floor(s / 60)}:${s % 60 < 10 ? '0' : ''}${s % 60}`;
+            
+            return React.createElement("div", { className: "fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm" },
+                React.createElement("div", { className: "bg-gray-800 rounded-2xl w-full max-w-sm p-8 border border-gray-600 text-center shadow-2xl" },
+                    React.createElement("h3", { className: "text-xl font-bold text-white mb-6 flex justify-center gap-2" }, React.createElement(Timer, {className:"w-6 h-6 text-indigo-400"}), " تایمر تمرکز"),
+                    React.createElement("div", { className: "text-6xl font-mono font-bold text-white mb-8" }, formatTime(timeLeft)),
+                    React.createElement("div", { className: "flex justify-center gap-4" },
+                        React.createElement("button", { onClick: () => setIsActive(!isActive), className: `px-6 py-3 rounded-xl font-bold ${isActive ? 'bg-yellow-600' : 'bg-green-600'} text-white` }, isActive ? 'توقف' : 'شروع'),
+                        React.createElement("button", { onClick: () => { setTimeLeft(25*60); setIsActive(false); }, className: "px-6 py-3 rounded-xl font-bold bg-gray-700 text-white" }, "ریست")
+                    ),
+                    React.createElement("button", { onClick: onClose, className: "mt-6 text-gray-500 text-sm underline" }, "بستن")
+                )
+            );
+        };
+
+        // --- MAIN APP COMPONENT ---
+        function LifeRPG() {
+            // STATE
+            const [loading, setLoading] = useState(true);
+            const [activeTab, setActiveTab] = useState('daily');
+            const [isEditMode, setIsEditMode] = useState(false);
+            const [showSettings, setShowSettings] = useState(false);
+            const [showAddModal, setShowAddModal] = useState(false);
+            const [showTimer, setShowTimer] = useState(false);
+            const [selectedQuestInfo, setSelectedQuestInfo] = useState(null);
+            
+            const [syncConfig, setSyncConfig] = useState(() => JSON.parse(localStorage.getItem('rpg_sync_config')) || { url: '', key: '' });
+            const [userId, setUserId] = useState(() => {
+                let stored = localStorage.getItem('rpg_user_id');
+                if (!stored) { stored = generateId(); localStorage.setItem('rpg_user_id', stored); }
+                return stored;
+            });
+            const [syncStatus, setSyncStatus] = useState('offline');
+
+            const [state, setState] = useState(() => {
+                const saved = localStorage.getItem('rpg_local_data');
+                return saved ? JSON.parse(saved) : {
+                    quests: INITIAL_DATA, xp: 0, xpHistory: [], level: 1, completedTasks: {}, dailyNote: '', streak: 0, lastLoginDate: '',
+                    planStartDateStr: `${new Date().getFullYear()}-12-21T00:00:00`,
+                    customEvents: [ { id: 'e1', title: 'شروع امتحانات', date: `${new Date().getFullYear() + 1}-01-05T09:00`, type: 'exam_start' }, { id: 'e2', title: 'پایان امتحانات', date: `${new Date().getFullYear() + 1}-01-15T12:00`, type: 'exam_end' } ]
+                };
+            });
+
+            const [planStatus, setPlanStatus] = useState({ currentWeek: 1, currentMonth: 1, dayOfPlan: 1, countdownLabel: '', countdownText: '' });
+            const [currentMonthView, setCurrentMonthView] = useState(1);
+            
+            // Temporary Inputs
+            const [newQuestType, setNewQuestType] = useState('daily');
+            const [newQuestData, setNewQuestData] = useState({ text: '', desc: '', xp: 50 });
+            const [newEventData, setNewEventData] = useState({ title: '', date: '' });
+            const [tempSyncConfig, setTempSyncConfig] = useState(syncConfig);
+
+            // --- EFFECTS ---
+            useEffect(() => { setLoading(false); }, []);
+            
+            useEffect(() => { localStorage.setItem('rpg_local_data', JSON.stringify(state)); }, [state]);
+
+            useEffect(() => {
+                let newLevel = 1;
+                for (let i = 0; i < LEVEL_THRESHOLDS.length; i++) { if (state.xp >= LEVEL_THRESHOLDS[i]) newLevel = i + 1; }
+                if (newLevel !== state.level) setState(prev => ({ ...prev, level: newLevel }));
+            }, [state.xp]);
+
+            // Sync Logic (Supabase)
+            const syncWithCloud = async (direction = 'push') => {
+                if (!syncConfig.url || !syncConfig.key) return;
+                setSyncStatus('syncing');
+                try {
+                    const endpoint = `${syncConfig.url}/rest/v1/planners`;
+                    const headers = { 'apikey': syncConfig.key, 'Authorization': `Bearer ${syncConfig.key}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' };
+                    if (direction === 'push') {
+                        const payload = { id: userId, data: state };
+                        const response = await fetch(`${endpoint}?on_conflict=id`, { method: 'POST', headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' }, body: JSON.stringify(payload) });
+                        if (!response.ok) throw new Error('Save failed');
+                        setSyncStatus('success');
+                    } else {
+                        const response = await fetch(`${endpoint}?id=eq.${userId}&select=data`, { method: 'GET', headers });
+                        if (!response.ok) throw new Error('Load failed');
+                        const result = await response.json();
+                        if (result && result.length > 0) { setState(result[0].data); setSyncStatus('success'); alert('دریافت شد!'); } 
+                        else { setSyncStatus('error'); alert('اطلاعاتی یافت نشد.'); }
+                    }
+                } catch (err) { console.error(err); setSyncStatus('error'); }
+                setTimeout(() => setSyncStatus(syncConfig.url ? 'idle' : 'offline'), 2000);
+            };
+
+            useEffect(() => {
+                if (!syncConfig.url) return;
+                const handler = setTimeout(() => syncWithCloud('push'), 3000);
+                return () => clearTimeout(handler);
+            }, [state, syncConfig]);
+
+            // Clock Logic
+            useEffect(() => {
+                const tick = () => {
+                    const now = getIranDate();
+                    const today = now.toISOString().split('T')[0];
+                    const start = new Date(state.planStartDateStr);
+                    let diffDays = Math.ceil((now.getTime() - start.getTime()) / 86400000);
+                    if (diffDays < 1) diffDays = 1;
+                    
+                    let cMonth = diffDays > 57 ? 3 : diffDays > 27 ? 2 : 1;
+                    let cLabel = '', cText = '';
+                    
+                    const sorted = [...state.customEvents].sort((a,b) => new Date(a.date) - new Date(b.date));
+                    const future = sorted.filter(e => new Date(e.date) >= now);
+                    if(future.length > 0) {
+                        cLabel = future[0].title;
+                        const tDiff = new Date(future[0].date).getTime() - now.getTime();
+                        const dLeft = Math.floor(tDiff/86400000);
+                        const hLeft = Math.floor((tDiff%86400000)/3600000);
+                        const mLeft = Math.floor((tDiff%3600000)/60000);
+                        cText = (dLeft===0 && hLeft===0) ? `${mLeft} دقیقه مانده!` : `${dLeft>0?dLeft+' روز و ':''}${hLeft} ساعت`;
+                    }
+                    setPlanStatus({ currentWeek: Math.ceil(diffDays/7), currentMonth: cMonth, dayOfPlan: diffDays, countdownLabel: cLabel, countdownText: cText });
+
+                    if (state.lastLoginDate !== today) {
+                        const newCompleted = {...state.completedTasks};
+                        state.quests.daily.forEach(q => delete newCompleted[`daily_${q.id}_${state.lastLoginDate}`]);
+                        setState(prev => ({...prev, lastLoginDate: today, completedTasks: newCompleted, dailyNote: '', streak: state.lastLoginDate ? prev.streak + 1 : 1 }));
+                    }
+                };
+                tick();
+                const interval = setInterval(tick, 60000);
+                return () => clearInterval(interval);
+            }, [state.lastLoginDate, state.planStartDateStr, state.customEvents]);
+
+            // Handlers
+            const toggleTask = (id, reward, type, recurring) => {
+                if (isEditMode) return;
+                const today = new Date().toISOString().split('T')[0];
+                const key = recurring ? `${type}_${id}_${today}` : `${type}_${id}`;
+                const isDone = state.completedTasks[key];
+                setState(prev => {
+                    const newTasks = {...prev.completedTasks};
+                    if(isDone) { delete newTasks[key]; return {...prev, completedTasks: newTasks, xp: Math.max(0, prev.xp - reward)}; }
+                    else { newTasks[key] = true; return {...prev, completedTasks: newTasks, xp: prev.xp + reward, xpHistory: [...prev.xpHistory, {date: today, amount: reward}]}; }
+                });
+            };
+
+            const handleSaveQuest = () => {
+                if(!newQuestData.text) return alert("عنوان؟");
+                const newQ = {...state.quests};
+                const item = { id: `${newQuestType}_${Date.now()}`, text: newQuestData.text, xp: parseInt(newQuestData.xp)||50, type: 'custom', time: 'شناور', desc: newQuestData.desc||'...' };
+                if(newQuestType==='daily') newQ.daily.push(item); else if(newQuestType==='weekly') newQ.weekly.push(item); else newQ.monthly[currentMonthView].push(item);
+                setState(prev => ({...prev, quests: newQ})); setShowAddModal(false);
+            };
+
+            const getWeeklyStats = () => {
+                const days = []; const today = new Date();
+                for(let i=6; i>=0; i--) {
+                    const d = new Date(today); d.setDate(today.getDate()-i);
+                    const ds = d.toISOString().split('T')[0];
+                    const val = state.xpHistory.filter(h=>h.date===ds).reduce((s,x)=>s+x.amount,0);
+                    days.push({label: new Intl.DateTimeFormat('fa-IR',{weekday:'short'}).format(d), val});
+                }
+                return days;
+            };
+
+            if(loading) return React.createElement("div", {className: "min-h-screen bg-gray-900 flex items-center justify-center text-white"}, "در حال بارگذاری...");
+
+            return React.createElement("div", { className: "min-h-screen pb-24" },
+                // Header
+                React.createElement("div", { className: "bg-gray-800 shadow-xl sticky top-0 z-20 border-b border-gray-700 p-4" },
+                    React.createElement("div", { className: "max-w-3xl mx-auto" },
+                        React.createElement("div", { className: "flex justify-between items-start mb-4" },
+                            React.createElement("div", null,
+                                React.createElement("div", { className: "text-sm font-bold text-gray-300 flex items-center gap-2" }, React.createElement(Calendar, {className:"w-4 h-4 text-indigo-400"}), " ", getShamsiDate()),
+                                React.createElement("div", { className: "text-[10px] text-gray-500 mt-1" }, `فاز ${planStatus.currentMonth} | روز ${planStatus.dayOfPlan}`)
+                            ),
+                            React.createElement("div", { className: "flex gap-2" },
+                                React.createElement("div", { title: "وضعیت سینک", className: "p-2" }, syncStatus==='syncing'?React.createElement(RefreshCw,{className:"w-5 h-5 animate-spin text-yellow-500"}):syncStatus==='success'?React.createElement(Cloud,{className:"w-5 h-5 text-green-500"}):React.createElement(CloudOff,{className:"w-5 h-5 text-gray-500"})),
+                                React.createElement("button", { onClick: ()=>setShowTimer(true), className: "p-2 rounded-lg bg-gray-700 hover:bg-gray-600" }, React.createElement(Timer, {className:"w-5 h-5"})),
+                                React.createElement("button", { onClick: ()=>setIsEditMode(!isEditMode), className: `p-2 rounded-lg ${isEditMode?'bg-yellow-500 text-black':'bg-gray-700'}` }, React.createElement(Edit3, {className:"w-5 h-5"})),
+                                React.createElement("button", { onClick: ()=>setShowSettings(true), className: "p-2 rounded-lg bg-gray-700 hover:bg-gray-600" }, React.createElement(Settings, {className:"w-5 h-5"}))
+                            )
+                        ),
+                        // Level Bar
+                        React.createElement("div", { className: "flex items-center gap-4" },
+                            React.createElement("div", { className: "w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center font-black text-xl border-2 border-indigo-400" }, state.level),
+                            React.createElement("div", { className: "flex-1" },
+                                React.createElement("div", { className: "flex justify-between text-xs mb-1" }, React.createElement("span", {className:"text-indigo-200"}, `سطح ${state.level}`), React.createElement("span", null, `${state.xp} / ${LEVEL_THRESHOLDS[state.level] || 'MAX'} XP`)),
+                                React.createElement("div", { className: "w-full h-3 bg-gray-900 rounded-full overflow-hidden border border-gray-700" }, React.createElement("div", { style: { width: `${Math.min(100, (state.xp / (LEVEL_THRESHOLDS[state.level]||10000))*100)}%` }, className: "h-full bg-indigo-500 rounded-full transition-all" }))
+                            )
+                        ),
+                        // Countdown
+                        planStatus.countdownLabel && React.createElement("div", { className: `mt-4 border rounded-lg p-3 flex justify-between text-sm ${planStatus.countdownText.includes('دقیقه')?'bg-red-900/20 border-red-500 text-red-200 animate-pulse':'bg-yellow-900/20 border-yellow-500 text-yellow-200'}` },
+                            React.createElement("div", { className: "flex gap-2 font-bold" }, React.createElement(Flag, {className:"w-5 h-5"}), ` ${planStatus.countdownLabel}:`),
+                            React.createElement("span", { className: "font-mono text-lg" }, planStatus.countdownText)
+                        )
+                    )
+                ),
+                
+                // Modals
+                showTimer && React.createElement(FocusTimer, { onClose: ()=>setShowTimer(false) }),
+                selectedQuestInfo && React.createElement("div", { className: "fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4", onClick: ()=>setSelectedQuestInfo(null) }, 
+                    React.createElement("div", { className: "bg-gray-800 p-6 rounded-2xl max-w-sm" },
+                        React.createElement("h3", { className: "text-xl font-bold text-indigo-400 mb-4" }, selectedQuestInfo.text),
+                        React.createElement("p", { className: "text-gray-300 text-sm leading-relaxed" }, selectedQuestInfo.desc),
+                        React.createElement("button", { className: "mt-6 w-full bg-indigo-600 py-2 rounded", onClick: ()=>setSelectedQuestInfo(null) }, "بستن")
+                    )
+                ),
+                
+                // Settings Modal
+                showSettings && React.createElement("div", { className: "fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" },
+                    React.createElement("div", { className: "bg-gray-800 rounded-2xl w-full max-w-md p-6 border border-gray-700 max-h-[90vh] overflow-y-auto" },
+                        React.createElement("div", { className: "flex justify-between mb-6" }, React.createElement("h2", { className: "text-xl font-bold" }, "تنظیمات"), React.createElement("button", { onClick: ()=>setShowSettings(false) }, React.createElement(X))),
+                        
+                        React.createElement("div", { className: "mb-6 border-b border-gray-700 pb-4" },
+                            React.createElement("label", { className: "text-sm text-gray-400 mb-2 block" }, "تاریخ شروع پلن:"),
+                            React.createElement("input", { type: "date", className: "w-full bg-gray-900 border border-gray-700 rounded p-2 text-white", value: state.planStartDateStr.split('T')[0], onChange: (e)=>setState(p=>({...p, planStartDateStr:`${e.target.value}T00:00:00`})) })
+                        ),
+                        
+                        React.createElement("div", { className: "mb-6 border-b border-gray-700 pb-4" },
+                            React.createElement("label", { className: "text-sm text-gray-300 font-bold mb-3 block" }, "رویدادهای مهم"),
+                            state.customEvents.map(e => React.createElement("div", { key: e.id, className: "flex justify-between items-center bg-gray-900 p-2 rounded border border-gray-700 text-sm mb-2" },
+                                React.createElement("div", null, React.createElement("div", {className:"text-white"}, e.title), React.createElement("div", {className:"text-xs text-gray-500"}, formatEventDate(e.date))),
+                                React.createElement("button", { onClick: ()=> { if(confirm('حذف؟')) setState(p=>({...p, customEvents: p.customEvents.filter(x=>x.id!==e.id)})) }, className: "text-red-500" }, React.createElement(Trash2, {className:"w-4 h-4"}))
+                            )),
+                            React.createElement("div", { className: "flex gap-2 mb-2" },
+                                React.createElement("input", { type: "text", placeholder: "عنوان", className: "flex-[2] bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white", value: newEventData.title, onChange: e=>setNewEventData({...newEventData, title: e.target.value}) }),
+                                React.createElement("input", { type: "datetime-local", className: "flex-[2] bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white ltr", value: newEventData.date, onChange: e=>setNewEventData({...newEventData, date: e.target.value}) })
+                            ),
+                            React.createElement("button", { className: "w-full bg-indigo-600/50 border border-indigo-500 text-indigo-200 py-2 rounded text-sm", onClick: ()=>{ if(!newEventData.title || !newEventData.date) return alert('خطا'); setState(p=>({...p, customEvents: [...p.customEvents, {id:`e_${Date.now()}`, ...newEventData}]})); setNewEventData({title:'',date:''}); } }, "افزودن رویداد")
+                        ),
+
+                        React.createElement("div", { className: "mb-6 p-4 bg-gray-900 rounded border border-gray-700" },
+                            React.createElement("h3", { className: "font-bold mb-2 flex items-center gap-2" }, React.createElement(Database, {className:"w-4 h-4"}), " سینک ابری (Supabase)"),
+                            React.createElement("input", { type: "text", placeholder: "Project URL", className: "w-full bg-black text-xs text-white p-2 rounded mb-2 ltr", value: tempSyncConfig.url, onChange: e=>setTempSyncConfig({...tempSyncConfig, url: e.target.value}) }),
+                            React.createElement("input", { type: "text", placeholder: "API Key", className: "w-full bg-black text-xs text-white p-2 rounded mb-2 ltr", value: tempSyncConfig.key, onChange: e=>setTempSyncConfig({...tempSyncConfig, key: e.target.value}) }),
+                            React.createElement("div", { className: "flex gap-2" },
+                                React.createElement("button", { className: "flex-1 bg-indigo-600 py-2 rounded text-sm", onClick: ()=>{ setSyncConfig(tempSyncConfig); localStorage.setItem('rpg_sync_config', JSON.stringify(tempSyncConfig)); alert('ذخیره شد'); } }, "ذخیره"),
+                                React.createElement("button", { className: "flex-1 bg-green-600 py-2 rounded text-sm", onClick: ()=>syncWithCloud('pull') }, "دریافت از سرور")
+                            ),
+                            React.createElement("div", { className: "text-[10px] text-gray-500 mt-2 text-center" }, `ID: ${userId}`)
+                        ),
+                        
+                        React.createElement("div", null,
+                            React.createElement("h3", { className: "font-bold mb-2 text-sm" }, "پشتیبان‌گیری دستی (فایل)"),
+                            React.createElement("div", { className: "flex gap-2" },
+                                React.createElement("button", { className: "flex-1 bg-gray-700 py-2 rounded text-sm flex justify-center gap-2", onClick: ()=>{ 
+                                    const b = new Blob([JSON.stringify(state)],{type:"application/json"}); const l=document.createElement('a'); l.href=URL.createObjectURL(b); l.download="backup.json"; l.click(); 
+                                } }, React.createElement(Save, {className:"w-4 h-4"}), " دانلود"),
+                                React.createElement("label", { className: "flex-1 bg-gray-700 py-2 rounded text-sm flex justify-center gap-2 cursor-pointer" },
+                                    React.createElement(RefreshCw, {className:"w-4 h-4"}), " آپلود",
+                                    React.createElement("input", { type: "file", className: "hidden", accept: ".json", onChange: (e)=>{
+                                        const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=(ev)=>{ try{setState(JSON.parse(ev.target.result)); alert('OK'); setShowSettings(false);}catch(x){alert('Error');}}; r.readAsText(f);
+                                    } })
+                                )
+                            )
+                        )
+                    )
+                ),
+
+                // Add Quest Modal
+                showAddModal && React.createElement("div", { className: "fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm" },
+                    React.createElement("div", { className: "bg-gray-800 rounded-2xl w-full max-w-md p-6 border border-gray-600" },
+                        React.createElement("h3", { className: "text-lg font-bold text-white mb-4" }, "ماموریت جدید"),
+                        React.createElement("input", { type: "text", placeholder: "عنوان", className: "w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white mb-4", value: newQuestData.text, onChange: e=>setNewQuestData({...newQuestData, text: e.target.value}) }),
+                        React.createElement("input", { type: "number", placeholder: "XP", className: "w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white mb-4", value: newQuestData.xp, onChange: e=>setNewQuestData({...newQuestData, xp: e.target.value}) }),
+                        React.createElement("textarea", { placeholder: "توضیحات...", className: "w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white mb-4 h-24", value: newQuestData.desc, onChange: e=>setNewQuestData({...newQuestData, desc: e.target.value}) }),
+                        React.createElement("div", { className: "flex gap-2" },
+                            React.createElement("button", { className: "flex-1 bg-indigo-600 text-white py-2 rounded-lg", onClick: handleSaveQuest }, "ذخیره"),
+                            React.createElement("button", { className: "flex-1 bg-gray-700 text-white py-2 rounded-lg", onClick: ()=>setShowAddModal(false) }, "لغو")
+                        )
+                    )
+                ),
+
+                // Main Content
+                React.createElement("div", { className: "max-w-3xl mx-auto p-4" },
+                    isEditMode && React.createElement("div", { className: "bg-yellow-500/10 text-yellow-200 p-3 text-center text-sm rounded-xl mb-4 border border-yellow-500/30" }, "حالت ویرایش فعال است"),
+                    
+                    React.createElement("nav", { className: "flex bg-gray-800 p-1 rounded-2xl mb-6 sticky top-[180px] z-10 shadow-lg" },
+                        ['daily', 'weekly', 'monthly', 'stats'].map(tab => 
+                            React.createElement("button", { key: tab, onClick: ()=>setActiveTab(tab), className: `flex-1 py-2 rounded-xl text-xs font-bold transition-all ${activeTab===tab?'bg-indigo-600 text-white':'text-gray-400'}` },
+                                tab==='daily'?'روزانه':tab==='weekly'?'هفتگی':tab==='monthly'?'نقشه':'عملکرد'
+                            )
+                        )
+                    ),
+
+                    activeTab === 'daily' && React.createElement("div", { className: "space-y-3" },
+                        state.quests.daily.map(q => {
+                            const done = state.completedTasks[`daily_${q.id}_${new Date().toISOString().split('T')[0]}`];
+                            return React.createElement("div", { key: q.id, onClick: ()=>toggleTask(q.id, q.xp, 'daily', true), className: `relative p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${done?'bg-gray-800/50 border-gray-700 opacity-60':'bg-gray-800 border-gray-700 hover:border-indigo-500'}` },
+                                React.createElement("div", { className: "flex items-center gap-4 w-full" },
+                                    React.createElement("div", { className: `w-6 h-6 rounded-full border-2 flex items-center justify-center ${done?'bg-green-500 border-green-500':'border-gray-500'}` }, done && React.createElement(CheckCircle, {className:"w-4 h-4 text-white"})),
+                                    React.createElement("div", { className: "w-full" },
+                                        isEditMode 
+                                            ? React.createElement("input", { type: "text", value: q.text, onClick: e=>e.stopPropagation(), onChange: e=> { const n={...state.quests}; n.daily.find(x=>x.id===q.id).text=e.target.value; setState(p=>({...p, quests: n})); }, className: "bg-gray-700 text-white p-2 rounded w-full mb-2" })
+                                            : React.createElement("h3", { className: `font-bold ${done?'line-through text-gray-500':'text-gray-100'}` }, q.text, q.crucial && React.createElement("span", {className:"text-[10px] text-yellow-400 bg-yellow-400/10 px-1 rounded mr-2"}, "حیاتی")),
+                                        React.createElement("div", { className: "flex items-center gap-3 text-xs text-gray-400 mt-1" }, q.time && React.createElement("span", {className:"flex items-center gap-1"}, React.createElement(Clock,{className:"w-3 h-3"}), q.time), React.createElement("span", {className:"text-indigo-400"}, `+${q.xp} XP`))
+                                    )
+                                ),
+                                React.createElement("div", { className: "flex items-center gap-2" },
+                                    !isEditMode && React.createElement("button", { onClick: e=>{e.stopPropagation();setSelectedQuestInfo(q);}, className: "p-2 text-gray-400 hover:text-white" }, React.createElement(Info,{className:"w-5 h-5"})),
+                                    isEditMode && React.createElement("button", { onClick: e=>{e.stopPropagation();if(confirm('حذف؟'))setState(p=>({...p, quests: {...p.quests, daily: p.quests.daily.filter(x=>x.id!==q.id)}}));}, className: "text-red-500 p-2" }, React.createElement(Trash2,{className:"w-4 h-4"}))
+                                )
+                            );
+                        }),
+                        React.createElement("div", { className: "bg-gray-800 p-4 rounded-xl border border-gray-700 mt-6" },
+                            React.createElement("h4", { className: "text-sm font-bold text-gray-300 mb-2 flex items-center gap-2" }, React.createElement(PenTool,{className:"w-4 h-4"}), " یادداشت امروز"),
+                            React.createElement("textarea", { value: state.dailyNote, onChange: e=>setState(p=>({...p, dailyNote: e.target.value})), className: "w-full bg-gray-900/50 rounded-lg border border-gray-700 p-3 text-sm text-white focus:border-indigo-500 outline-none h-20 placeholder-gray-600", placeholder: "بنویس..." })
+                        ),
+                        isEditMode && React.createElement("button", { onClick: ()=>{setNewQuestType('daily');setShowAddModal(true);}, className: "w-full py-4 border-2 border-dashed border-gray-600 rounded-xl text-gray-400 flex items-center justify-center gap-2" }, React.createElement(Plus,{className:"w-5 h-5"}), " افزودن")
+                    ),
+
+                    activeTab === 'weekly' && React.createElement("div", { className: "space-y-3" },
+                        React.createElement("div", { className: "bg-teal-900/20 p-4 rounded-xl border border-teal-500/20 mb-4 text-teal-200 text-sm" }, "جمعه‌ها بررسی کن که آیا این هفته به اهدافت رسیدی؟"),
+                        state.quests.weekly.map(q => {
+                            const done = state.completedTasks[`weekly_${q.id}_${new Date().toISOString().split('T')[0]}`];
+                            return React.createElement("div", { key: q.id, onClick: ()=>toggleTask(q.id, q.xp, 'weekly', true), className: `relative p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${done?'bg-gray-800/50 border-gray-700 opacity-60':'bg-gray-800 border-gray-700 hover:border-indigo-500'}` },
+                                React.createElement("div", { className: "flex items-center gap-4 w-full" },
+                                    React.createElement("div", { className: `w-6 h-6 rounded-full border-2 flex items-center justify-center ${done?'bg-green-500 border-green-500':'border-gray-500'}` }, done && React.createElement(CheckCircle, {className:"w-4 h-4 text-white"})),
+                                    React.createElement("div", null, React.createElement("h3", { className: `font-bold ${done?'line-through text-gray-500':'text-gray-100'}` }, q.text), React.createElement("span", {className:"text-indigo-400 text-xs"}, `+${q.xp} XP`))
+                                ),
+                                isEditMode && React.createElement("button", { onClick: e=>{e.stopPropagation();if(confirm('حذف؟'))setState(p=>({...p, quests: {...p.quests, weekly: p.quests.weekly.filter(x=>x.id!==q.id)}}));}, className: "text-red-500 p-2" }, React.createElement(Trash2,{className:"w-4 h-4"}))
+                            );
+                        }),
+                        isEditMode && React.createElement("button", { onClick: ()=>{setNewQuestType('weekly');setShowAddModal(true);}, className: "w-full py-4 border-2 border-dashed border-gray-600 rounded-xl text-gray-400 flex items-center justify-center gap-2" }, React.createElement(Plus,{className:"w-5 h-5"}), " افزودن")
+                    ),
+
+                    activeTab === 'monthly' && React.createElement("div", { className: "space-y-6" },
+                        React.createElement("div", { className: "flex items-center justify-between bg-gray-800 p-2 rounded-2xl border border-gray-700" },
+                            React.createElement("button", { onClick: ()=>setCurrentMonthView(Math.max(1, currentMonthView-1)), disabled: currentMonthView===1, className: "p-3 hover:bg-gray-700 rounded-xl disabled:opacity-30" }, React.createElement(ChevronRight)),
+                            React.createElement("div", { className: "text-center" }, React.createElement("h2", { className: "text-lg font-bold" }, MONTH_THEMES[currentMonthView].title), React.createElement("div", { className: "text-xs text-gray-400" }, MONTH_THEMES[currentMonthView].subtitle)),
+                            React.createElement("button", { onClick: ()=>setCurrentMonthView(Math.min(3, currentMonthView+1)), disabled: currentMonthView===3, className: "p-3 hover:bg-gray-700 rounded-xl disabled:opacity-30" }, React.createElement(ChevronLeft))
+                        ),
+                        React.createElement("div", { className: `p-6 rounded-2xl bg-gradient-to-br ${MONTH_THEMES[currentMonthView].color} text-white shadow-xl flex items-center gap-4` },
+                            React.createElement("div", { className: "p-3 bg-white/20 rounded-xl" }, MONTH_THEMES[currentMonthView].icon),
+                            React.createElement("div", null, React.createElement("div", { className: "text-[10px] uppercase opacity-80 mb-1" }, "ماموریت اصلی"), React.createElement("h3", { className: "text-2xl font-black" }, MONTH_THEMES[currentMonthView].boss))
+                        ),
+                        React.createElement("div", { className: "space-y-3" },
+                            state.quests.monthly[currentMonthView].map(q => {
+                                const done = state.completedTasks[`monthly_${q.id}_${new Date().toISOString().split('T')[0]}`]; // Monthly can use daily logic for now or custom
+                                return React.createElement("div", { key: q.id, onClick: ()=>toggleTask(q.id, q.xp, 'monthly', false), className: `relative p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${done?'bg-gray-800/50 border-gray-700 opacity-60':'bg-gray-800 border-gray-700 hover:border-indigo-500'}` },
+                                    React.createElement("div", { className: "flex items-center gap-4 w-full" },
+                                        React.createElement("div", { className: `w-6 h-6 rounded-full border-2 flex items-center justify-center ${done?'bg-green-500 border-green-500':'border-gray-500'}` }, done && React.createElement(CheckCircle, {className:"w-4 h-4 text-white"})),
+                                        React.createElement("div", null, React.createElement("h3", { className: `font-bold ${done?'line-through text-gray-500':'text-gray-100'}` }, q.text), React.createElement("span", {className:"text-indigo-400 text-xs"}, `+${q.xp} XP`))
+                                    ),
+                                    isEditMode && React.createElement("button", { onClick: e=>{e.stopPropagation();if(confirm('حذف؟'))setState(p=>({...p, quests: {...p.quests, monthly: {...p.quests.monthly, [currentMonthView]: p.quests.monthly[currentMonthView].filter(x=>x.id!==q.id)}}}));}, className: "text-red-500 p-2" }, React.createElement(Trash2,{className:"w-4 h-4"}))
+                                );
+                            })
+                        ),
+                        isEditMode && React.createElement("button", { onClick: ()=>{setNewQuestType('monthly');setShowAddModal(true);}, className: "w-full py-4 border-2 border-dashed border-gray-600 rounded-xl text-gray-400 flex items-center justify-center gap-2" }, React.createElement(Plus,{className:"w-5 h-5"}), " افزودن")
+                    ),
+
+                    activeTab === 'stats' && React.createElement("div", { className: "space-y-4" },
+                        React.createElement("div", { className: "grid grid-cols-2 gap-4" },
+                            React.createElement("div", { className: "bg-gray-800 p-4 rounded-xl flex flex-col items-center" }, React.createElement(Zap, {className:"text-yellow-500 mb-2"}), React.createElement("div", { className: "text-2xl font-bold" }, state.streak), React.createElement("div", { className: "text-xs text-gray-400" }, "روز زنجیره")),
+                            React.createElement("div", { className: "bg-gray-800 p-4 rounded-xl flex flex-col items-center" }, React.createElement(BookOpen, {className:"text-blue-500 mb-2"}), React.createElement("div", { className: "text-2xl font-bold" }, state.xpHistory.length), React.createElement("div", { className: "text-xs text-gray-400" }, "تسک تکمیل شده"))
+                        ),
+                        React.createElement("div", { className: "bg-gray-800 p-5 rounded-2xl border border-gray-700" },
+                            React.createElement("h3", { className: "text-lg font-bold text-white flex items-center gap-2 mb-4" }, React.createElement(BarChart2, {className:"w-5 h-5 text-indigo-400"}), " عملکرد ۷ روز گذشته"),
+                            React.createElement(SimpleBarChart, { data: getWeeklyStats(), maxVal: 300 })
+                        )
+                    )
+                )
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(React.createElement(LifeRPG));
+    </script>
+</body>
+</html>
