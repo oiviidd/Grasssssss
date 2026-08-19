@@ -2,8 +2,9 @@
  * Procedural hill, authored to the same conventions as the original terrain so every
  * shader keeps working untouched:
  *
- *   • footprint is a 10 × 10 unit stage centred on the origin (the shaders derive
- *     their UV as `worldPosition.xz / 10.0 + 0.5`)
+ *   • footprint is a 10 × 10 unit stage centred on the origin. That is this generator's
+ *     choice, not a constraint any more: the stage box is fitted to whatever mesh is
+ *     loaded and handed to the shaders as u_stageCentre / u_stageSize
  *   • Y is up, and the height range is kept close to the original's ~1 unit span so
  *     the grass blade heights (0.08 – 0.30) stay in proportion
  *   • the rim is pushed down and flattened, because the fog SDF dissolves everything

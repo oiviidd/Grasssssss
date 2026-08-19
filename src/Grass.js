@@ -17,6 +17,18 @@ import { PRECISION_PREFIX } from './FboHelper.js';
 import { instancedGrassVert, instancedGrassFrag, plantVert, plantFrag } from './glsl/grass.js';
 import { scatterOnSurface, orientToNormal, makeRandom } from './Scatter.js';
 
+/** Shrinks a footprint inward, for props that should keep clear of the very edge. */
+function insetBounds( bounds, amount ) {
+
+	return {
+		minX: bounds.minX + amount,
+		maxX: bounds.maxX - amount,
+		minZ: bounds.minZ + amount,
+		maxZ: bounds.maxZ - amount
+	};
+
+}
+
 // straight off grass_placement.buf's packed header — the original blade scale range
 const BLADE_SCALE_MIN = 0.0795090646;
 const BLADE_SCALE_RANGE = 0.2189329114;
@@ -183,8 +195,14 @@ export class Grass {
 			uniforms: Object.assign( {
 				u_time: this.uniforms.u_time,
 				u_envTexture: this.uniforms.u_envTexture,
+				u_fogBox: this.uniforms.u_fogBox,
+				u_fogRadius: this.uniforms.u_fogRadius,
+				u_fogStart: this.uniforms.u_fogStart,
+				u_fogRange: this.uniforms.u_fogRange,
 				u_terrainGrassTexture: this.uniforms.u_terrainGrassTexture,
-				u_terrainDrawTexture: this.uniforms.u_terrainDrawTexture
+				u_terrainDrawTexture: this.uniforms.u_terrainDrawTexture,
+				u_stageCentre: this.uniforms.u_stageCentre,
+				u_stageSize: this.uniforms.u_stageSize
 			}, extraUniforms ),
 			vertexShader: PRECISION_PREFIX + vertexShader,
 			fragmentShader: PRECISION_PREFIX + fragmentShader,
@@ -203,7 +221,10 @@ export class Grass {
 		const scatter = scatterOnSurface( surface, {
 			count: options.bladeCount !== undefined ? options.bladeCount : 130000,
 			seed: 1337,
+			bounds: options.bounds,
 			rimRadius: options.rimRadius,
+			rimFade: options.rimFade,
+			maxSlope: options.maxSlope,
 			upBlend: 0.35
 		} );
 
@@ -372,8 +393,11 @@ export class Grass {
 		const scatter = scatterOnSurface( surface, {
 			count: instances,
 			seed: 4242,
+			bounds: options.bounds ? insetBounds( options.bounds, 0.4 ) : null,
 			rimRadius,
-			maxSlope: 0.5,
+			rimFade: options.rimFade,
+			// tufts are pickier about slope than the carpet, but still follow the setting
+			maxSlope: options.maxSlope !== undefined ? options.maxSlope * 0.8 : 0.5,
 			patchScale: 0.7,
 			patchStrength: 0.8,
 			upBlend: 0.55

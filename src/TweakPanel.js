@@ -290,6 +290,31 @@ export class TweakPanel {
 
 	}
 
+	/**
+	 * Widen or narrow a slider's travel after the fact.
+	 *
+	 * Grass extent is authored against the procedural hill's 4.9, but a sculpted hill sets
+	 * its own. Without this the slider silently clamps the fitted value and the outermost
+	 * band loses its grass the moment the slider is touched.
+	 */
+	range( key, min, max ) {
+
+		const control = this.outputs[ key ];
+		if ( ! control ) return this;
+
+		// A range input only accepts min + n*step, and it snaps *max* down too when max is
+		// off that grid — so a fitted 4.989 against a 0.05 step silently becomes 4.95 and
+		// the outermost band of the hill loses its grass. Shift min instead, so the fitted
+		// value is exactly reachable at the right-hand end.
+		const alignedMin = max - Math.round( ( max - min ) / control.step ) * control.step;
+
+		control.input.min = alignedMin;
+		control.input.max = max;
+
+		return this;
+
+	}
+
 	/** Push values back into the sliders — used after a fit or a reset. */
 	set( key, value ) {
 
@@ -302,7 +327,7 @@ export class TweakPanel {
 
 	}
 
-	actions() {
+	actions( { onImport, onPaste } = {} ) {
 
 		const wrap = document.createElement( 'div' );
 		wrap.className = 'tweak-actions';
@@ -315,6 +340,24 @@ export class TweakPanel {
 
 		wrap.appendChild( copy );
 		wrap.appendChild( download );
+
+		if ( onImport ) {
+
+			const load = document.createElement( 'button' );
+			load.textContent = 'Import file';
+			load.addEventListener( 'click', () => onImport( this ) );
+			wrap.appendChild( load );
+
+		}
+
+		if ( onPaste ) {
+
+			const paste = document.createElement( 'button' );
+			paste.textContent = 'Paste config';
+			paste.addEventListener( 'click', () => onPaste( this ) );
+			wrap.appendChild( paste );
+
+		}
 		this.root.appendChild( wrap );
 
 		this.status = document.createElement( 'p' );
@@ -322,7 +365,7 @@ export class TweakPanel {
 		this.root.appendChild( this.status );
 
 		this.textarea = document.createElement( 'textarea' );
-		this.textarea.readOnly = true;
+		this.textarea.placeholder = 'Config appears here on export — or paste one in and press "Paste config".';
 		this.textarea.spellcheck = false;
 		this.root.appendChild( this.textarea );
 

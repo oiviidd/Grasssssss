@@ -45,8 +45,14 @@ export class Flowers {
 			// throws most candidates away, so ask for roughly 2.5x what you want
 			count: options.flowerCount !== undefined ? options.flowerCount : 1100,
 			seed: 5150,
+			bounds: options.bounds ? {
+				minX: options.bounds.minX + 0.5, maxX: options.bounds.maxX - 0.5,
+				minZ: options.bounds.minZ + 0.5, maxZ: options.bounds.maxZ - 0.5
+			} : null,
 			rimRadius: ( options.rimRadius !== undefined ? options.rimRadius : 4.7 ) - 0.5,
-			maxSlope: 0.42,
+			rimFade: options.rimFade,
+			// flowers keep to the flattest ground of the three, proportionally
+			maxSlope: options.maxSlope !== undefined ? options.maxSlope * 0.68 : 0.42,
 			// tight, high-contrast patches so flowers cluster into clumps rather than
 			// dusting evenly across the whole meadow
 			patchScale: 1.05,
@@ -99,8 +105,14 @@ export class Flowers {
 				u_texture: { value: texture },
 				u_atlasCells: { value: atlasCells },
 				u_envTexture: this.uniforms.u_envTexture,
+				u_fogBox: this.uniforms.u_fogBox,
+				u_fogRadius: this.uniforms.u_fogRadius,
+				u_fogStart: this.uniforms.u_fogStart,
+				u_fogRange: this.uniforms.u_fogRange,
 				u_terrainGrassTexture: this.uniforms.u_terrainGrassTexture,
-				u_terrainDrawTexture: this.uniforms.u_terrainDrawTexture
+				u_terrainDrawTexture: this.uniforms.u_terrainDrawTexture,
+				u_stageCentre: this.uniforms.u_stageCentre,
+				u_stageSize: this.uniforms.u_stageSize
 			},
 			vertexShader: PRECISION_PREFIX + flowerVert,
 			fragmentShader: PRECISION_PREFIX + flowerFrag,

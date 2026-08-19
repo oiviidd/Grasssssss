@@ -6,9 +6,10 @@
  *   EXPORT — press G (glb) or O (obj) to download the current procedural hill.
  *   EDIT   — sculpt it in Blender. Keep these rules and nothing else needs changing:
  *              · Y up, Z forward  (Blender's glTF exporter does this by default)
- *              · stay inside a 10 × 10 unit footprint centred on the origin — the
- *                shaders derive their UV as worldPosition.xz / 10.0 + 0.5, so anything
- *                outside that box samples clamped edge pixels
+ *              · put it anywhere — the stage box the terrain maps cover is fitted to the
+ *                mesh's own bounds on import, so an off-centre sculpt is still covered
+ *                edge to edge. The fog box does stay on the origin, so a hill far from
+ *                it will haze asymmetrically until the fog sliders are retuned
  *              · keep the height range roughly within ±1 unit; grass blades are only
  *                0.08 – 0.30 tall and the proportion is what sells the scale
  *              · let the rim (|x| or |z| > ~3.5) fall away — the fog SDF dissolves the

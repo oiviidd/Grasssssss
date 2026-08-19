@@ -123,7 +123,7 @@ function bakeAO( raster, { directions = 8, steps = 10, radius = 0.9 } = {} ) {
 
 export function bakeTerrainMaps( raster, options = {} ) {
 
-	const { heights, slopes, resolution, stageSize } = raster;
+	const { heights, slopes, resolution, stageSize, centreX = 0, centreZ = 0 } = raster;
 	const count = resolution * resolution;
 
 	const rockSlopeStart = options.rockSlopeStart !== undefined ? options.rockSlopeStart : 0.22;
@@ -147,11 +147,11 @@ export function bakeTerrainMaps( raster, options = {} ) {
 
 	for ( let j = 0; j < resolution; j ++ ) {
 
-		const z = ( ( j + 0.5 ) / resolution - 0.5 ) * stageSize;
+		const z = ( ( j + 0.5 ) / resolution - 0.5 ) * stageSize + centreZ;
 
 		for ( let i = 0; i < resolution; i ++ ) {
 
-			const x = ( ( i + 0.5 ) / resolution - 0.5 ) * stageSize;
+			const x = ( ( i + 0.5 ) / resolution - 0.5 ) * stageSize + centreX;
 			const k = j * resolution + i;
 			const o = k * 4;
 

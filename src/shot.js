@@ -122,6 +122,26 @@ export const GRASS = {
  */
 
 /**
+ * Fog shape — the strongest control over how hard the ground's silhouette reads.
+ *
+ * `boxSize` and `radius` describe the rounded box on the xz plane that stays clear;
+ * ground beyond it fades to sky over `range`, starting `start` past the box. These were
+ * hard-coded in the original as 2.5 / 1.0 / 1.5 / 1.0.
+ *
+ * With a low camera the horizon is the furthest visible ground, which sits exactly where
+ * the fog has dissolved it — so a small box smears the ground edge over a wide band. Grass
+ * normally hides this by breaking the silhouette; with the grass turned off it is obvious.
+ * A larger box or a shorter range gives a cleaner edge, at the cost of the diorama
+ * feeling less like it floats.
+ */
+export const FOG = {
+	boxSize: 3.6,
+	radius: 1.0,
+	start: 1.9,
+	range: 0.7
+};
+
+/**
  * Insects, placed by hand. `y` is height *above the ground*, so these survive a change
  * of hill. `strength` scales the wander amplitude.
  */

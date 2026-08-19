@@ -32,6 +32,12 @@ uniform float u_time;
 uniform sampler2D u_terrainGrassTexture;
 uniform sampler2D u_terrainDrawTexture;
 
+// The stage box the baked terrain maps cover: world xz centre and its square span.
+// It follows the loaded mesh rather than being pinned to 10 units at the origin, so an
+// off-centre sculpt still reads its own colour instead of clamped edge pixels.
+uniform vec2 u_stageCentre;
+uniform float u_stageSize;
+
 // The original hard-coded 5 atlas cells. Made a uniform so an artist can supply a sheet
 // with a different number of flowers without touching the shader.
 uniform float u_atlasCells;
@@ -51,7 +57,7 @@ void main () {
 	pos = pos * instanceSize;
 	pos += simplexNoiseDerivatives(vec4(instancePosition * 0.25, u_time * 0.3)).xyz * vec3(1.0, 0.3, 1.0) * 0.02 * yRatio * yRatio;
 
-	vec2 terrainUv = instancePosition.xz / 10.0 + 0.5;
+	vec2 terrainUv = ( instancePosition.xz - u_stageCentre ) / u_stageSize + 0.5;
 	vec3 drawInfo = texture2D(u_terrainDrawTexture, terrainUv).rgb;
 	drawInfo.xy = (drawInfo.xy * 2.0 - 1.0) * drawInfo.z ;
 

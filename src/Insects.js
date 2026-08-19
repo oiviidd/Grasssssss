@@ -92,7 +92,11 @@ export class Insects {
 					u_geometryScale: { value: new THREE.Vector2() },
 					u_geometryOffset: { value: new THREE.Vector2() },
 					u_hasAlpha: { value: 1 },
-					u_envTexture: this.uniforms.u_envTexture
+					u_envTexture: this.uniforms.u_envTexture,
+					u_fogBox: this.uniforms.u_fogBox,
+					u_fogRadius: this.uniforms.u_fogRadius,
+					u_fogStart: this.uniforms.u_fogStart,
+					u_fogRange: this.uniforms.u_fogRange
 				},
 				vertexShader: PRECISION_PREFIX + spriteVert,
 				fragmentShader: PRECISION_PREFIX + spriteFrag,

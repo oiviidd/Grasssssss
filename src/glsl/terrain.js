@@ -1,7 +1,7 @@
 /**
  * ── GROUND ─────────────────────────────────────────────────────────────────────
  * The terrain is a 1641-vertex sculpt. Everything is driven from a single
- * projected UV — world xz mapped into 0..1 over a 10×10 unit stage — which is the
+ * projected UV — world xz mapped into 0..1 over the stage box — which is the
  * same UV the grass uses, so grass and ground can never disagree on colour.
  *
  * Four maps:
@@ -14,6 +14,9 @@
  *   terrain_ao                  — two baked AO channels
  */
 export const terrainVert = /* glsl */`
+uniform vec2 u_stageCentre;
+uniform float u_stageSize;
+
 varying vec3 v_worldPosition;
 varying vec3 v_viewPosition;
 varying vec3 v_viewNormal;
@@ -24,7 +27,7 @@ void main () {
 	vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 	gl_Position = projectionMatrix * mvPosition;
 
-	v_terrainUv = worldPosition.xz / 10.0 + 0.5;
+	v_terrainUv = ( worldPosition.xz - u_stageCentre ) / u_stageSize + 0.5;
 
 	v_worldPosition = worldPosition.xyz;
 	v_viewPosition = mvPosition.xyz;
@@ -119,13 +122,15 @@ uniform vec2 u_mouseXZ;
 uniform float u_mouseRadius;
 uniform float u_mouseStrength;
 uniform float u_drag;
+uniform vec2 u_stageCentre;
+uniform float u_stageSize;
 
 varying vec2 v_uv;
 
 void main () {
 	vec4 texel = texture2D(u_texture, v_uv);
 
-	vec2 pos = v_uv * 10.0 - 5.0;
+	vec2 pos = (v_uv - 0.5) * u_stageSize + u_stageCentre;
 	vec3 delta3 = vec3(pos, 0.0) - vec3(u_mouseXZ, 0.001);
 	vec2 nor = normalize(delta3).xy;
 	float dist = length(delta3);

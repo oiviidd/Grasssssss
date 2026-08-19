@@ -36,36 +36,54 @@ export function makeRandom( seed = 1 ) {
  */
 export function scatterOnSurface( surface, {
 	count = 48000,
-	seed = 1,
+	bounds = null,
 	rimRadius = 4.7,
+	rimFade = 1.1,
 	maxSlope = 0.62,
 	slopeFalloff = 0.34,
 	patchScale = 0.45,
 	patchStrength = 0.55,
 	upBlend = 0.35,
-	jitter = 0.9
+	jitter = 0.9,
+	seed = 1
 } = {} ) {
 
 	const random = makeRandom( seed );
 
-	// oversample the grid and reject — rejection is what creates the patchiness
-	const cells = Math.ceil( Math.sqrt( count * 1.85 ) );
-	const step = rimRadius * 2 / cells;
+	// Cover the terrain's actual footprint, not a square centred on the origin. A sculpted
+	// hill is rarely centred, and assuming symmetry scatters into empty space on one side
+	// while leaving a bald strip on the other — which reads as "one edge is fine, the rest
+	// have a margin".
+	const area = bounds || { minX: - rimRadius, maxX: rimRadius, minZ: - rimRadius, maxZ: rimRadius };
+
+	const spanX = Math.max( 0.01, area.maxX - area.minX );
+	const spanZ = Math.max( 0.01, area.maxZ - area.minZ );
+
+	// `count` is a density, quoted against a reference 9.4 x 9.4 stage — not an absolute.
+	// Tying the grid to count alone meant widening the extent spread the same blades over
+	// more ground and thinned the whole meadow; this keeps density fixed and lets the
+	// total follow the area.
+	const REFERENCE_SPAN = 9.4;
+	const perAxis = Math.sqrt( count * 1.85 ) / REFERENCE_SPAN;
+
+	const cellsX = Math.max( 1, Math.ceil( spanX * perAxis ) );
+	const cellsZ = Math.max( 1, Math.ceil( spanZ * perAxis ) );
+
+	const stepX = spanX / cellsX;
+	const stepZ = spanZ / cellsZ;
 
 	const positions = [];
 	const normals = [];
 	const sample = { y: 0, nx: 0, ny: 1, nz: 0 };
 
-	for ( let j = 0; j < cells; j ++ ) {
+	for ( let j = 0; j < cellsZ; j ++ ) {
 
-		for ( let i = 0; i < cells; i ++ ) {
+		for ( let i = 0; i < cellsX; i ++ ) {
 
-			if ( positions.length >= count * 3 ) break;
+			const x = area.minX + ( i + 0.5 + ( random() - 0.5 ) * jitter ) * stepX;
+			const z = area.minZ + ( j + 0.5 + ( random() - 0.5 ) * jitter ) * stepZ;
 
-			const x = - rimRadius + ( i + 0.5 + ( random() - 0.5 ) * jitter ) * step;
-			const z = - rimRadius + ( j + 0.5 + ( random() - 0.5 ) * jitter ) * step;
-
-			if ( Math.abs( x ) > rimRadius || Math.abs( z ) > rimRadius ) continue;
+			if ( x < area.minX || x > area.maxX || z < area.minZ || z > area.maxZ ) continue;
 
 			if ( ! surface.sample( x, z, sample ) ) continue;
 
@@ -78,9 +96,11 @@ export function scatterOnSurface( surface, {
 			const patch = fbm( x * patchScale, z * patchScale, 3 ) * 0.5 + 0.5;
 			density *= 1 - patchStrength + patchStrength * patch;
 
-			// thin out toward the fog line
-			const edge = Math.max( Math.abs( x ), Math.abs( z ) );
-			density *= 1 - THREE.MathUtils.smoothstep( edge, rimRadius - 1.1, rimRadius );
+			// Fade against the nearest edge of the actual footprint, so every side gets the
+			// same treatment however the mesh is placed.
+			const fade = Math.max( 0.01, rimFade );
+			const inset = Math.min( x - area.minX, area.maxX - x, z - area.minZ, area.maxZ - z );
+			density *= THREE.MathUtils.smoothstep( inset, 0, fade );
 
 			if ( random() > density ) continue;
 

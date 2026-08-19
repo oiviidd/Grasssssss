@@ -27,6 +27,12 @@ uniform float u_time;
 uniform sampler2D u_terrainGrassTexture;
 uniform sampler2D u_terrainDrawTexture;
 
+// The stage box the baked terrain maps cover: world xz centre and its square span.
+// It follows the loaded mesh rather than being pinned to 10 units at the origin, so an
+// off-centre sculpt still reads its own colour instead of clamped edge pixels.
+uniform vec2 u_stageCentre;
+uniform float u_stageSize;
+
 varying vec3 v_worldPosition;
 varying vec3 v_viewNormal;
 varying vec3 v_color;
@@ -37,7 +43,7 @@ ${simplexNoiseDerivatives}
 ${qRotate}
 
 void main () {
-	vec2 terrainUv = instancePosition.xz / 10.0 + 0.5;
+	vec2 terrainUv = ( instancePosition.xz - u_stageCentre ) / u_stageSize + 0.5;
 	vec3 drawInfo = texture2D(u_terrainDrawTexture, terrainUv).rgb;
 	drawInfo.xy = (drawInfo.xy * 2.0 - 1.0) * drawInfo.z;
 
@@ -124,6 +130,12 @@ uniform float u_movementStrength;
 uniform sampler2D u_terrainGrassTexture;
 uniform sampler2D u_terrainDrawTexture;
 
+// The stage box the baked terrain maps cover: world xz centre and its square span.
+// It follows the loaded mesh rather than being pinned to 10 units at the origin, so an
+// off-centre sculpt still reads its own colour instead of clamped edge pixels.
+uniform vec2 u_stageCentre;
+uniform float u_stageSize;
+
 varying vec3 v_worldPosition;
 varying vec3 v_viewNormal;
 varying vec3 v_color;
@@ -133,7 +145,7 @@ ${simplexNoiseDerivatives}
 ${qRotate}
 
 void main () {
-	vec2 terrainUv = position.xz / 10.0 + 0.5;
+	vec2 terrainUv = ( position.xz - u_stageCentre ) / u_stageSize + 0.5;
 	vec3 drawInfo = texture2D(u_terrainDrawTexture, terrainUv).rgb;
 	drawInfo.xy = (drawInfo.xy * 2.0 - 1.0) * drawInfo.z;
 

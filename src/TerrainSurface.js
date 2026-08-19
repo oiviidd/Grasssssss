@@ -187,8 +187,13 @@ export class TerrainSurface {
 
 	}
 
-	/** Raster of surface heights over the stage — the input for the rock/AO bake. */
-	rasterize( resolution, stageSize = 10 ) {
+	/**
+	 * Raster of surface heights over the stage — the input for the rock/AO bake.
+	 *
+	 * The stage is a square of `stageSize` centred on (centreX, centreZ) rather than on the
+	 * origin, so a hill sculpted off-centre is still covered edge to edge.
+	 */
+	rasterize( resolution, stageSize = 10, centreX = 0, centreZ = 0 ) {
 
 		const heights = new Float32Array( resolution * resolution );
 		const slopes = new Float32Array( resolution * resolution );
@@ -197,12 +202,12 @@ export class TerrainSurface {
 
 		for ( let j = 0; j < resolution; j ++ ) {
 
-			// v maps to +z, matching the shader's `worldPosition.xz / 10.0 + 0.5`
-			const z = ( ( j + 0.5 ) / resolution - 0.5 ) * stageSize;
+			// v maps to +z, matching the shader's `( worldPosition.xz - u_stageCentre ) / u_stageSize + 0.5`
+			const z = ( ( j + 0.5 ) / resolution - 0.5 ) * stageSize + centreZ;
 
 			for ( let i = 0; i < resolution; i ++ ) {
 
-				const x = ( ( i + 0.5 ) / resolution - 0.5 ) * stageSize;
+				const x = ( ( i + 0.5 ) / resolution - 0.5 ) * stageSize + centreX;
 				const k = j * resolution + i;
 				const result = this.sample( x, z, sample );
 
@@ -223,7 +228,7 @@ export class TerrainSurface {
 
 		}
 
-		return { heights, slopes, hit, resolution, stageSize };
+		return { heights, slopes, hit, resolution, stageSize, centreX, centreZ };
 
 	}
 

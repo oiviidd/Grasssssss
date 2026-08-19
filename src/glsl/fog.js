@@ -19,6 +19,16 @@
 export const fogChunk = /* glsl */`
 uniform sampler2D u_envTexture;
 
+// The original hard-coded the stage as a 2.5 x 2.5 rounded box of radius 1, fading over
+// [1.5, 2.5]. Exposed as uniforms because those numbers decide how hard the ground's
+// silhouette reads: with a low camera the horizon is formed by the furthest visible
+// ground, which sits out where the fog has already dissolved it, so the edge smears over
+// a wide band instead of ending cleanly.
+uniform vec2 u_fogBox;
+uniform float u_fogRadius;
+uniform float u_fogStart;
+uniform float u_fogRange;
+
 #define RECIPROCAL_PI 0.3183098861837907
 #define RECIPROCAL_PI2 0.15915494309189535
 
@@ -43,8 +53,8 @@ vec3 applyFog(vec3 color, vec3 worldPosition) {
 	vec3 nToCamera = normalize(toCamera);
 
 	vec3 fogColor = texture2D(u_envTexture, equirectUv(nToCamera)).rgb;
-	float d = sdRoundedBox(worldPosition.xz, vec2(2.5, 2.5), 1.0);
-	float fog = clamp(d - 1.5, 0.0, 1.0);
+	float d = sdRoundedBox(worldPosition.xz, u_fogBox, u_fogRadius);
+	float fog = clamp((d - u_fogStart) / max(0.001, u_fogRange), 0.0, 1.0);
 	color = mix(color, fogColor, vec3(fog));
 	return color;
 }

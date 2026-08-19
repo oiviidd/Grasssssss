@@ -34,7 +34,7 @@ import { Grass } from './Grass.js';
 import { Flowers } from './Flowers.js';
 import { Insects } from './Insects.js';
 import { exportGLB, exportOBJ, loadCustomTerrain } from './TerrainIO.js';
-import { SHOT, INSECTS, GRASS } from './shot.js';
+import { SHOT, INSECTS, GRASS, FOG } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
 import { pickFile, parseGLB, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
 
@@ -48,7 +48,50 @@ const CUSTOM_TERRAIN = MODEL_PATH + 'terrain_custom.glb';
 
 const STAGE_SIZE = 10;
 const MAP_RESOLUTION = 512;
-const RIM_RADIUS = 4.7;
+
+/**
+ * The stage: the world-space square the baked terrain maps (colour, rock, AO) and the
+ * interaction field cover.
+ *
+ * It used to be a fixed 10 units centred on the origin, matching a hard-coded
+ * `xz / 10.0 + 0.5` in four shaders. A hill sculpted in Blender is rarely centred there —
+ * zamin18.glb runs z -6.99 .. +2.99 — and everything outside the box fell out of both the
+ * baked maps and the scatter, which showed up as the far hill staying bald. The box now
+ * follows the mesh, so a sculpt is covered wherever the artist leaves it.
+ *
+ * Kept square: the AO bake marches in texels, and anisotropic ones would read a stretched
+ * horizon.
+ */
+const stage = {
+	centre: new THREE.Vector2( 0, 0 ),
+	size: STAGE_SIZE
+};
+/**
+ * How far from the origin the scatter reaches, and how steep a face still grows grass.
+ *
+ * 4.7 is tuned for the procedural hill, whose rim deliberately droops and dissolves into
+ * the fog — grass thinning out over the last unit is the point. A sculpted hill usually
+ * fills the whole stage instead, and then the same taper strips grass off everything past
+ * |x| or |z| = 3.6 and all of it past 4.7, which reads as a bare hill in the background.
+ * Re-derived from the mesh's own bounds when a custom terrain is loaded.
+ */
+let rimRadius = 4.7;
+let rimFade = 1.1;
+let scatterBounds = null;
+let maxSlope = 0.62;
+
+/** Fits the stage box to the loaded mesh. Must run before anything bakes or scatters. */
+function deriveStage() {
+
+	const box = surface.boundingBox;
+
+	stage.centre.set( ( box.min.x + box.max.x ) * 0.5, ( box.min.z + box.max.z ) * 0.5 );
+	stage.size = Math.max( 1e-3, box.max.x - box.min.x, box.max.z - box.min.z );
+	uniforms.u_stageSize.value = stage.size;
+
+	return stage;
+
+}
 
 const container = document.getElementById( 'app' );
 const loaderEl = document.getElementById( 'loader' );
@@ -77,11 +120,24 @@ const cameraRig = new CameraRig( camera, renderer.domElement );
 const uniforms = {
 	u_time: { value: 0 },
 	u_envTexture: { value: null },
+
+	// Fog shape. Every material that includes <lusionFog> needs these, so they live on the
+	// shared object and are merged in wherever a material is built.
+	u_fogBox: { value: new THREE.Vector2( FOG.boxSize, FOG.boxSize ) },
+	u_fogRadius: { value: FOG.radius },
+	u_fogStart: { value: FOG.start },
+	u_fogRange: { value: FOG.range },
+
 	u_terrainInfoTexture: { value: null },
 	u_terrainGrassTexture: { value: null },
 	u_terrainRocksTexture: { value: null },
 	u_terrainAOTexture: { value: null },
-	u_terrainDrawTexture: { value: null }
+	u_terrainDrawTexture: { value: null },
+
+	// Shared by everything that reads a baked terrain map. `value` aliases stage.centre,
+	// so moving the stage updates every material at once; the size has to be pushed.
+	u_stageCentre: { value: stage.centre },
+	u_stageSize: { value: stage.size }
 };
 
 /* ── render targets ────────────────────────────────────────────────────────── */
@@ -122,7 +178,9 @@ const drawMaterial = new THREE.RawShaderMaterial( {
 		u_mouseXZ: { value: new THREE.Vector2() },
 		u_mouseRadius: { value: 0.5 },
 		u_mouseStrength: { value: 0 },
-		u_drag: { value: 0.975 }
+		u_drag: { value: 0.975 },
+		u_stageCentre: uniforms.u_stageCentre,
+		u_stageSize: uniforms.u_stageSize
 	},
 	vertexShader: FboHelper.PRECISION_PREFIX + quadVert,
 	fragmentShader: FboHelper.PRECISION_PREFIX + terrainDrawFrag,
@@ -229,10 +287,15 @@ function build( assets ) {
 
 	surface = new TerrainSurface( hillGeometry );
 
+	// Order matters: the raster below, the scatter, and every terrain-map lookup are all
+	// expressed in stage space.
+	deriveStage();
+	if ( usingCustomTerrain ) deriveScatterExtent();
+
 	// Bake the maps the original shipped as painted textures. They have to be generated
 	// rather than reused: grass.jpg has the river channel stained into it, and the AO /
 	// rock masks follow the old riverbed.
-	const raster = surface.rasterize( MAP_RESOLUTION, STAGE_SIZE );
+	const raster = surface.rasterize( MAP_RESOLUTION, stage.size, stage.centre.x, stage.centre.y );
 	const maps = bakeTerrainMaps( raster );
 
 	uniforms.u_terrainGrassTexture.value = maps.grassTexture;
@@ -252,7 +315,11 @@ function build( assets ) {
 			uniforms: {
 				u_time: uniforms.u_time,
 				u_noiseTexture: { value: assets.noise },
-				u_envTexture: uniforms.u_envTexture
+				u_envTexture: uniforms.u_envTexture,
+				u_fogBox: uniforms.u_fogBox,
+				u_fogRadius: uniforms.u_fogRadius,
+				u_fogStart: uniforms.u_fogStart,
+				u_fogRange: uniforms.u_fogRange
 			},
 			vertexShader: skyVert,
 			fragmentShader: skyFrag,
@@ -267,10 +334,16 @@ function build( assets ) {
 	terrainMesh = new THREE.Mesh( hillGeometry, new THREE.ShaderMaterial( {
 		uniforms: {
 			u_envTexture: uniforms.u_envTexture,
+			u_fogBox: uniforms.u_fogBox,
+			u_fogRadius: uniforms.u_fogRadius,
+			u_fogStart: uniforms.u_fogStart,
+			u_fogRange: uniforms.u_fogRange,
 			u_terrainInfoTexture: uniforms.u_terrainInfoTexture,
 			u_terrainGrassTexture: uniforms.u_terrainGrassTexture,
 			u_terrainRocksTexture: uniforms.u_terrainRocksTexture,
-			u_terrainAOTexture: uniforms.u_terrainAOTexture
+			u_terrainAOTexture: uniforms.u_terrainAOTexture,
+			u_stageCentre: uniforms.u_stageCentre,
+			u_stageSize: uniforms.u_stageSize
 		},
 		vertexShader: terrainVert,
 		fragmentShader: terrainFrag
@@ -282,7 +355,10 @@ function build( assets ) {
 	/* grass, flowers, insects ------------------------------------------------- */
 
 	grass.build( surface, {
-		rimRadius: RIM_RADIUS,
+		rimRadius,
+		rimFade,
+		maxSlope,
+		bounds: scatterArea(),
 		bladeCount: GRASS.bladeCount,
 		bladeWidthScale: GRASS.bladeWidthScale,
 		bladeHeightScale: GRASS.bladeHeightScale,
@@ -292,7 +368,10 @@ function build( assets ) {
 	scene.add( grass.container );
 
 	flowers.build( surface, assets.flowers, {
-		rimRadius: RIM_RADIUS,
+		rimRadius,
+		rimFade,
+		maxSlope,
+		bounds: scatterArea(),
 		flowerCount: GRASS.flowerCount,
 		flowerScale: GRASS.flowerScale
 	} );
@@ -316,9 +395,20 @@ function build( assets ) {
 
 	// Handle for poking at the scene from the console.
 	window.grassStudy = {
-		renderer, scene, camera, cameraRig, bloom, grade, uniforms, surface,
-		grass, flowers, get insects() { return insects; },
+		renderer, scene, camera, cameraRig, bloom, grade, uniforms,
+
+		// Live getters, not snapshots. installTerrain() reassigns these module bindings, so
+		// a plain property would keep handing back the terrain that was loaded at startup —
+		// which silently invalidates anything measured through the handle afterwards.
+		get surface() { return surface; },
+		get scatterBounds() { return scatterBounds; },
+		get grass() { return grass; },
+		get flowers() { return flowers; },
+		get insects() { return insects; },
+
 		hill: HILL_DEFAULTS,
+		installTerrain,
+		tuned,
 		exportGLB: () => exportGLB( terrainMesh ),
 		exportOBJ: () => exportOBJ( terrainMesh ),
 
@@ -337,7 +427,10 @@ function build( assets ) {
 
 			grass.dispose();
 			grass.build( surface, {
-				rimRadius: RIM_RADIUS,
+				rimRadius,
+				rimFade,
+				maxSlope,
+				bounds: scatterArea(),
 				bladeCount: options.bladeCount,
 				bladeWidthScale: options.bladeWidthScale,
 				bladeHeightScale: options.bladeHeightScale,
@@ -393,8 +486,8 @@ function build( assets ) {
 			const buffer = new Uint8Array( 4 );
 			renderer.readRenderTargetPixels(
 				drawTargets[ drawRead ],
-				Math.round( ( x / STAGE_SIZE + 0.5 ) * 256 ),
-				Math.round( ( z / STAGE_SIZE + 0.5 ) * 256 ),
+				Math.round( ( ( x - stage.centre.x ) / stage.size + 0.5 ) * 256 ),
+				Math.round( ( ( z - stage.centre.y ) / stage.size + 0.5 ) * 256 ),
 				1, 1, buffer
 			);
 			return Array.from( buffer );
@@ -430,7 +523,19 @@ const tuned = {
 	tuftScale: GRASS.tuftScale,
 	flowerCount: GRASS.flowerCount,
 	flowerScale: GRASS.flowerScale,
-	atlasCells: 5
+	atlasCells: 5,
+
+	fogBox: FOG.boxSize,
+	fogStart: FOG.start,
+	fogRange: FOG.range,
+
+	grassExtent: rimRadius,
+	rimFade: rimFade,
+	maxSlope: maxSlope,
+
+	vignetteFrom: SHOT.grade.vignetteFrom,
+	vignetteTo: SHOT.grade.vignetteTo,
+	tintOpacity: SHOT.grade.tintOpacity
 };
 
 let rebuildTimer = null;
@@ -450,7 +555,10 @@ function scheduleRebuild( what ) {
 
 			flowers.dispose();
 			flowers.build( surface, flowerTexture, {
-				rimRadius: RIM_RADIUS,
+				rimRadius,
+				rimFade,
+				maxSlope,
+				bounds: scatterArea(),
 				flowerCount: tuned.flowerCount,
 				flowerScale: tuned.flowerScale,
 				atlasCells: tuned.atlasCells
@@ -460,7 +568,10 @@ function scheduleRebuild( what ) {
 
 			grass.dispose();
 			grass.build( surface, {
-				rimRadius: RIM_RADIUS,
+				rimRadius,
+				rimFade,
+				maxSlope,
+				bounds: scatterArea(),
 				bladeCount: tuned.bladeCount,
 				bladeWidthScale: tuned.bladeWidthScale,
 				bladeHeightScale: tuned.bladeHeightScale,
@@ -518,7 +629,22 @@ function configText() {
 		cameraDistance: ${SHOT.camera.cameraDistance}
 	},
 
+// grade — vignetteFrom/To and tintOpacity inside SHOT.grade
+//   vignetteFrom: ${f( tuned.vignetteFrom, 3 )},
+//   vignetteTo: ${f( tuned.vignetteTo, 3 )},
+//   tintOpacity: ${f( tuned.tintOpacity, 3 )},
+
+export const FOG = {
+	boxSize: ${f( tuned.fogBox, 2 )},
+	radius: ${FOG.radius},
+	start: ${f( tuned.fogStart, 2 )},
+	range: ${f( tuned.fogRange, 2 )}
+};
+
 export const GRASS = {
+	grassExtent: ${f( tuned.grassExtent, 2 )},
+	rimFade: ${f( tuned.rimFade, 2 )},
+	maxSlope: ${f( tuned.maxSlope, 2 )},
 	bladeCount: ${Math.round( tuned.bladeCount )},
 	bladeWidthScale: ${f( tuned.bladeWidthScale, 2 )},
 	bladeHeightScale: ${f( tuned.bladeHeightScale, 2 )},
@@ -553,6 +679,36 @@ function buildTweakPanel( texture ) {
 
 			}
 
+			if ( key === 'grassExtent' || key === 'rimFade' || key === 'maxSlope' ) {
+
+				rimRadius = tuned.grassExtent;
+				rimFade = tuned.rimFade;
+				maxSlope = tuned.maxSlope;
+				scheduleRebuild( 'grass' );
+				setTimeout( () => scheduleRebuild( 'flowers' ), 320 );
+				return;
+
+			}
+
+			if ( key.startsWith( 'vignette' ) || key === 'tintOpacity' ) {
+
+				// Grade values are read on the frame, so these need no rebuild either.
+				grade.vignetteFrom = tuned.vignetteFrom;
+				grade.vignetteTo = tuned.vignetteTo;
+				grade.tintOpacity = tuned.tintOpacity;
+				return;
+
+			}
+
+			if ( key.startsWith( 'fog' ) ) {
+
+				uniforms.u_fogBox.value.set( tuned.fogBox, tuned.fogBox );
+				uniforms.u_fogStart.value = tuned.fogStart;
+				uniforms.u_fogRange.value = tuned.fogRange;
+				return;
+
+			}
+
 			if ( key.startsWith( 'flower' ) ) scheduleRebuild( 'flowers' );
 			else if ( key.startsWith( 'blade' ) || key.startsWith( 'tuft' ) ) scheduleRebuild( 'grass' );
 			else applyTunedCamera();
@@ -576,6 +732,17 @@ function buildTweakPanel( texture ) {
 		.slider( 'bladeHeightScale', 'blade height', tuned.bladeHeightScale, 0.2, 2, 0.01, 'rebuild' )
 		.slider( 'tuftInstances', 'tuft count', tuned.tuftInstances, 0, 6000, 50, 'rebuild' )
 		.slider( 'tuftScale', 'tuft height', tuned.tuftScale, 0.2, 2.5, 0.01, 'rebuild' )
+		.slider( 'grassExtent', 'grass extent', tuned.grassExtent, 1, 4.9, 0.05, 'rebuild' )
+		.slider( 'rimFade', 'edge fade', tuned.rimFade, 0.02, 2, 0.02, 'rebuild' )
+		.slider( 'maxSlope', 'max slope', tuned.maxSlope, 0.15, 1, 0.01, 'rebuild' )
+		.group( 'Fog' )
+		.slider( 'fogBox', 'clear extent', tuned.fogBox, 1.5, 6, 0.05 )
+		.slider( 'fogStart', 'fade start', tuned.fogStart, 0, 4, 0.05 )
+		.slider( 'fogRange', 'fade softness', tuned.fogRange, 0.05, 3, 0.05 )
+		.group( 'Grade' )
+		.slider( 'vignetteFrom', 'vignette start', tuned.vignetteFrom, 0, 1.5, 0.01 )
+		.slider( 'vignetteTo', 'vignette end', tuned.vignetteTo, 0.2, 2.5, 0.01 )
+		.slider( 'tintOpacity', 'tint strength', tuned.tintOpacity, 0, 0.6, 0.005 )
 		.group( 'Flowers' )
 		.slider( 'flowerCount', 'flower count', tuned.flowerCount, 0, 4000, 50, 'rebuild' )
 		.slider( 'flowerScale', 'flower size', tuned.flowerScale, 0.1, 2, 0.01, 'rebuild' )
@@ -598,18 +765,93 @@ function buildTweakPanel( texture ) {
 			{ label: 'Export flower sheet', onClick: p => exportFlowerAtlas( p ) }
 		] )
 		.note( 'Requirements for imported files', [
-			'<b>Hill</b> &mdash; <code>.glb</code>. Y up, Z forward (Blender glTF default). Keep it inside a <code>10 &times; 10</code> unit box centred on the origin: the shaders derive UV as <code>worldPosition.xz / 10.0 + 0.5</code>, so anything outside samples clamped edge pixels. Keep height within roughly <code>&plusmn;1</code> unit &mdash; blades are only 0.08&ndash;0.30 tall and that ratio is what sells the scale. Let the rim fall away past <code>|x|</code> or <code>|z| &asymp; 3.5</code>; fog dissolves the ground out there and a hard edge reads as a cut. Apply modifiers, export normals.',
+			'<b>Hill</b> &mdash; <code>.glb</code>. Y up, Z forward (Blender glTF default). Position and size are free: the stage the terrain maps cover is fitted to the mesh on import, so an off-centre sculpt still gets colour and grass edge to edge. Keep height within roughly <code>&plusmn;1</code> unit &mdash; blades are only 0.08&ndash;0.30 tall and that ratio is what sells the scale. The fog box stays on the origin, so a hill far from it hazes lopsidedly until the fog sliders are retuned. Apply modifiers, export normals.',
 			'<b>Blade</b> &mdash; <code>.glb</code>, one small mesh. Model a <i>single</i> blade standing on the origin and pointing +Y. Size and position do not matter: it is re-based to 0&ndash;1 in Y on import, because the shader uses <code>position.y</code> directly as the bend ratio. Keep it very low poly &mdash; this is drawn 150k+ times; the original is 7 vertices. Flat cards work best. Two-sided is automatic.',
 			'<b>Tuft</b> &mdash; <code>.glb</code>. <b>One</b> clump of tall grass, standing on the origin pointing +Y, re-based the same way. Export gives you a single clump for exactly this reason: whatever you send back is treated as one tuft and scattered, so do not model a whole field. A few hundred vertices is fine; it is drawn a few thousand times, and total tuft vertices are capped, so a heavy clump lowers the count that fits. Silhouette matters more than detail &mdash; this is what breaks the skyline.',
 			'<b>Flower sheet</b> &mdash; <code>.png</code> with alpha. A single horizontal strip of flowers, evenly divided, each cell drawn on a quad standing on its base. Export gives you the current sheet (750&times;256, 5 cells) to paint over. Set <i>atlas cells</i> to however many are in your strip. Each cell is about 3:5, taller than wide. Transparent background &mdash; anything under 0.4% alpha is discarded.',
 			'Exports carry position and normals only. Internal attributes are stripped, because three writes anything it does not recognise as an integer custom accessor and Blender refuses the file when it meets one.',
 			'Imports are live and temporary &mdash; nothing is written to the project. To keep one, hand the file to the developer; the hill also loads automatically from <code>assets/models/terrain_custom.glb</code>.'
 		] )
-		.actions();
+		.actions( { onImport: importConfig, onPaste: pasteConfig } );
 
 	// start frozen, matching the toggle's default
 	cameraRig.shakeStrength = 0;
 	cameraRig.lookStrength = 0;
+
+}
+
+/**
+ * Widens the scatter to whatever the loaded mesh actually covers.
+ *
+ * The 4.7 default belongs to the procedural hill, whose rim deliberately droops into the
+ * fog — grass thinning over the last unit is the point there. A sculpted hill normally
+ * fills the stage, and that same taper then strips grass from everything past |x| or
+ * |z| = 3.6 and all of it past 4.7, leaving the background slopes bare.
+ *
+ * Must run on *every* path that swaps the terrain. It originally lived inline in build(),
+ * which only runs at page load, so importing a hill at runtime kept the procedural rim
+ * and the edges stayed bald — the exact symptom this was meant to fix.
+ */
+function deriveScatterExtent() {
+
+	const box = surface.boundingBox;
+	const half = stage.size * 0.5;
+
+	rimRadius = half;
+
+	// Clamped to the stage as well as the mesh. deriveStage() fits the box around the mesh,
+	// so this is a no-op in practice — it only bites if a caller scatters against a stage
+	// that was fitted to some other terrain.
+	scatterBounds = {
+		minX: Math.max( stage.centre.x - half, box.min.x ),
+		maxX: Math.min( stage.centre.x + half, box.max.x ),
+		minZ: Math.max( stage.centre.y - half, box.min.z ),
+		maxZ: Math.min( stage.centre.y + half, box.max.z )
+	};
+
+	// A sculpted hill has a real edge rather than a drooping rim, so the long fade that
+	// suits the procedural one just leaves a bald ring.
+	rimFade = 0.2;
+
+	tuned.grassExtent = rimRadius;
+	tuned.rimFade = rimFade;
+
+	if ( panel ) {
+
+		// The slider is authored for the procedural hill; re-range it before pushing the
+		// fitted value or the input clamps it and the outer band goes bald on first touch.
+		panel.range( 'grassExtent', 0.5, rimRadius );
+		panel.set( 'grassExtent', rimRadius );
+		panel.set( 'rimFade', rimFade );
+
+	}
+
+	return { rimRadius };
+
+}
+
+/**
+ * The box the scatter actually fills.
+ *
+ * deriveScatterExtent() fits `scatterBounds` to the mesh, and `bounds` wins over
+ * `rimRadius` inside scatterOnSurface — which quietly made the "grass extent" slider do
+ * nothing on a sculpted hill. Intersecting the two gives the slider its meaning back:
+ * at its default it is half the stage and changes nothing, and pulling it down draws the
+ * meadow in from every side at once.
+ */
+function scatterArea() {
+
+	if ( ! scatterBounds ) return null;
+
+	const cx = stage.centre.x;
+	const cz = stage.centre.y;
+
+	return {
+		minX: Math.max( scatterBounds.minX, cx - rimRadius ),
+		maxX: Math.min( scatterBounds.maxX, cx + rimRadius ),
+		minZ: Math.max( scatterBounds.minZ, cz - rimRadius ),
+		maxZ: Math.min( scatterBounds.maxZ, cz + rimRadius )
+	};
 
 }
 
@@ -650,17 +892,25 @@ async function readGLB( panel, label ) {
  * Swapping the hill invalidates everything seated on it, so the surface sampler, the
  * baked rock/AO/albedo maps and all three scatters are rebuilt against the new geometry.
  */
-async function importTerrain( panel ) {
-
-	const geometry = await readGLB( panel, 'Hill' );
-	if ( ! geometry ) return;
+/**
+ * Swaps in a new terrain and rebuilds everything that sits on it.
+ *
+ * Split out of the file-picker handler so the swap can be driven directly — from the
+ * console, or a test — without going through a file dialog. Everything downstream of the
+ * terrain has to be redone: the surface sampler, the baked colour/rock/AO maps, the
+ * scatter extent, and then the grass, flowers and insects that are seated on it.
+ */
+export async function installTerrain( geometry ) {
 
 	geometry.computeBoundingBox();
 	const size = geometry.boundingBox.getSize( new THREE.Vector3() );
 
 	surface = new TerrainSurface( geometry );
-	const maps = bakeTerrainMaps( surface.rasterize( MAP_RESOLUTION, STAGE_SIZE ) );
 
+	deriveStage();
+
+	const maps = bakeTerrainMaps(
+		surface.rasterize( MAP_RESOLUTION, stage.size, stage.centre.x, stage.centre.y ) );
 	uniforms.u_terrainGrassTexture.value = maps.grassTexture;
 	uniforms.u_terrainInfoTexture.value = maps.infoTexture;
 	uniforms.u_terrainAOTexture.value = maps.aoTexture;
@@ -669,14 +919,29 @@ async function importTerrain( panel ) {
 	terrainMesh.geometry = geometry;
 
 	usingCustomTerrain = true;
+	deriveScatterExtent();
 	rebuildEverything();
 
-	// A mesh far outside the stage still renders, but its UVs clamp and it drifts out of
-	// the fog's readable core — worth saying rather than leaving them to wonder.
-	const oversized = size.x > 12 || size.z > 12;
-	panel.say( oversized
-		? `Loaded, but it is ${size.x.toFixed( 1 )}×${size.z.toFixed( 1 )} units — over 10×10, so UVs clamp.`
-		: `Hill loaded (${size.x.toFixed( 1 )}×${size.z.toFixed( 1 )} units).` );
+	return { size, stageCentre: stage.centre.clone(), stageSize: stage.size };
+
+}
+
+async function importTerrain( panel ) {
+
+	const geometry = await readGLB( panel, 'Hill' );
+	if ( ! geometry ) return;
+
+	const { size, stageCentre } = await installTerrain( geometry );
+
+	const offset = Math.hypot( stageCentre.x, stageCentre.y );
+
+	// The terrain maps and the scatter follow the mesh now, but the fog box does not — it
+	// is still an SDF centred on the origin, because where the haze sits is a look decision
+	// rather than a property of the mesh. An off-centre hill therefore fogs asymmetrically,
+	// which is worth saying rather than leaving them to wonder.
+	panel.say( offset > 0.25
+		? `Hill loaded (${size.x.toFixed( 1 )}×${size.z.toFixed( 1 )} units), centred at x ${stageCentre.x.toFixed( 1 )}, z ${stageCentre.y.toFixed( 1 )}. Maps and grass follow it; the fog box stays on the origin, so tune fog if the haze looks lopsided.`
+		: `Hill loaded (${size.x.toFixed( 1 )}×${size.z.toFixed( 1 )} units). Grass extent set to ${rimRadius.toFixed( 1 )}.` );
 
 }
 
@@ -724,6 +989,139 @@ async function importFlowerAtlas( panel ) {
 
 }
 
+/**
+ * Reads a config back in, so a tuning session survives a reload and can be handed around.
+ *
+ * Accepts either artefact the panel produces: the .js paste block or a plain JSON dump.
+ * Rather than parse JavaScript, it pulls `key: number` pairs out with a regex and keeps
+ * the ones it recognises — tolerant of comments, trailing commas and the array syntax in
+ * the camera block, none of which JSON.parse would survive.
+ */
+function applyConfigText( panel, text, source ) {
+
+	try {
+
+		const numbers = {};
+		for ( const match of text.matchAll( /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?[\d.]+)/g ) ) {
+
+			numbers[ match[ 1 ] ] = Number( match[ 2 ] );
+
+		}
+
+		// the camera block stores arrays, not scalars
+		const position = text.match( /position:\s*\[([^\]]+)\]/ );
+		const rotation = text.match( /rotation:\s*\[([^\]]+)\]/ );
+		const toNumbers = m => m[ 1 ].split( ',' ).map( v => Number( v.trim() ) );
+
+		if ( position ) {
+
+			const [ x, y, z ] = toNumbers( position );
+			Object.assign( numbers, { posX: x, posY: y, posZ: z } );
+
+		}
+
+		if ( rotation ) {
+
+			const [ pitch, yaw ] = toNumbers( rotation );
+			Object.assign( numbers, { pitch, yaw } );
+
+		}
+
+		// map the file's own names onto the panel's
+		const aliases = { boxSize: 'fogBox', start: 'fogStart', range: 'fogRange' };
+		for ( const key in aliases ) {
+
+			if ( numbers[ key ] !== undefined ) numbers[ aliases[ key ] ] = numbers[ key ];
+
+		}
+
+		let applied = 0;
+		for ( const key in tuned ) {
+
+			if ( numbers[ key ] === undefined || ! Number.isFinite( numbers[ key ] ) ) continue;
+			tuned[ key ] = numbers[ key ];
+			panel.set( key, numbers[ key ] );
+			applied ++;
+
+		}
+
+		if ( applied === 0 ) {
+
+			panel.say( 'Nothing recognised in that file.' );
+			return;
+
+		}
+
+		applyTunedCamera();
+		uniforms.u_fogBox.value.set( tuned.fogBox, tuned.fogBox );
+		uniforms.u_fogStart.value = tuned.fogStart;
+		uniforms.u_fogRange.value = tuned.fogRange;
+
+		scheduleRebuild( 'grass' );
+		setTimeout( () => scheduleRebuild( 'flowers' ), 320 );
+
+		panel.say( `Applied ${applied} values from ${source}.` );
+
+	} catch ( error ) {
+
+		console.error( error );
+		panel.say( 'Import failed: ' + error.message );
+
+	}
+
+}
+
+async function importConfig( panel ) {
+
+	const file = await pickFile( '.js,.json,.txt' );
+	if ( ! file ) return;
+
+	applyConfigText( panel, await file.text(), file.name );
+
+}
+
+/**
+ * Reads a config out of the clipboard, falling back to whatever is in the textarea.
+ *
+ * Clipboard reads need both permission and a real user gesture, and are refused outright
+ * in some contexts — so the textarea below the buttons is editable and doubles as the
+ * manual route: paste there, press the same button.
+ */
+async function pasteConfig( panel ) {
+
+	let text = '';
+
+	try {
+
+		text = await navigator.clipboard.readText();
+
+	} catch ( error ) {
+
+		text = '';
+
+	}
+
+	if ( ! text.trim() ) {
+
+		text = panel.textarea ? panel.textarea.value : '';
+
+		if ( ! text.trim() ) {
+
+			panel.say( 'Clipboard unavailable — paste the config into the box below, then press this again.' );
+			if ( panel.textarea ) panel.textarea.focus();
+			return;
+
+		}
+
+		applyConfigText( panel, text, 'the box below' );
+		return;
+
+	}
+
+	applyConfigText( panel, text, 'clipboard' );
+
+}
+
 async function exportFlowerAtlas( panel ) {
 
 	try {
@@ -765,7 +1163,10 @@ function rebuildEverything() {
 
 	grass.dispose();
 	grass.build( surface, {
-		rimRadius: RIM_RADIUS,
+		rimRadius,
+		rimFade,
+		maxSlope,
+		bounds: scatterArea(),
 		bladeCount: tuned.bladeCount,
 		bladeWidthScale: tuned.bladeWidthScale,
 		bladeHeightScale: tuned.bladeHeightScale,
@@ -775,7 +1176,10 @@ function rebuildEverything() {
 
 	flowers.dispose();
 	flowers.build( surface, flowerTexture, {
-		rimRadius: RIM_RADIUS,
+		rimRadius,
+		rimFade,
+		maxSlope,
+		bounds: scatterArea(),
 		flowerCount: tuned.flowerCount,
 		flowerScale: tuned.flowerScale,
 		atlasCells: tuned.atlasCells
