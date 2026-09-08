@@ -30,6 +30,24 @@ const STYLE = `
 	pointer-events: auto;
 }
 #tweak.is-hidden { display: none; }
+/* A phone has no T key, and the panel covers the very framing you open it to judge. */
+#tweak-toggle {
+	position: fixed;
+	right: 10px;
+	bottom: 10px;
+	width: 34px;
+	height: 34px;
+	border: 1px solid rgba(234, 246, 247, 0.25);
+	border-radius: 50%;
+	background: rgba(8, 26, 30, 0.55);
+	backdrop-filter: blur(8px);
+	color: rgba(234, 246, 247, 0.75);
+	font-size: 15px;
+	line-height: 1;
+	cursor: pointer;
+	z-index: 31;
+	-webkit-tap-highlight-color: transparent;
+}
 #tweak h2 {
 	margin: 0 0 2px;
 	font-size: 10px;
@@ -150,8 +168,29 @@ export class TweakPanel {
 
 		const hint = document.createElement( 'p' );
 		hint.className = 'tweak-hint';
-		hint.textContent = 'T hides this panel.';
+		hint.textContent = 'T hides this panel, or tap the dot.';
 		this.root.appendChild( hint );
+
+		// Tap target as well as the key, so the panel can be dismissed on a phone. Kept out
+		// of `this.root` on purpose — it has to survive the panel being hidden.
+		//
+		// Named `toggleButton`, not `toggle`: this class already has a toggle() *method* for
+		// checkbox rows, and assigning the element over it shadows the method on the instance,
+		// so the first .toggle('freeze', ...) call dies and the whole scene fails to build.
+		this.toggleButton = document.createElement( 'button' );
+		this.toggleButton.id = 'tweak-toggle';
+		this.toggleButton.type = 'button';
+		this.toggleButton.title = 'Show/hide the tweak panel';
+		this.toggleButton.textContent = '⚙';
+		this.toggleButton.addEventListener( 'click', () => this.toggleVisibility() );
+		document.body.appendChild( this.toggleButton );
+
+		// `?clean` opens straight into the bare shot — the point of loading it on a device.
+		if ( /(^|[?&#])clean/.test( location.search + location.hash ) ) {
+
+			this.root.classList.add( 'is-hidden' );
+
+		}
 
 	}
 

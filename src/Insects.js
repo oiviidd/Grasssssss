@@ -94,9 +94,13 @@ export class Insects {
 					u_hasAlpha: { value: 1 },
 					u_envTexture: this.uniforms.u_envTexture,
 					u_fogBox: this.uniforms.u_fogBox,
+					u_fogCentre: this.uniforms.u_fogCentre,
 					u_fogRadius: this.uniforms.u_fogRadius,
 					u_fogStart: this.uniforms.u_fogStart,
-					u_fogRange: this.uniforms.u_fogRange
+					u_fogRange: this.uniforms.u_fogRange,
+					u_hazeStart: this.uniforms.u_hazeStart,
+					u_hazeRange: this.uniforms.u_hazeRange,
+					u_hazeAmount: this.uniforms.u_hazeAmount
 				},
 				vertexShader: PRECISION_PREFIX + spriteVert,
 				fragmentShader: PRECISION_PREFIX + spriteFrag,

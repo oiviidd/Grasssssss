@@ -8,10 +8,15 @@
  *   • `applyFog(...)`   — aerial perspective. The fog *colour* is the sky in the
  *                         direction the fragment is being viewed from, so distant
  *                         geometry literally dissolves into the correct part of the
- *                         sky. The fog *amount* is not depth based at all: it is a
- *                         2D rounded-box SDF around the origin on the xz plane, so
- *                         the diorama fades out at the edges of the "stage" no
- *                         matter where the camera is.
+ *                         sky. The fog *amount* is the stronger of two terms:
+ *
+ *                           stage — a 2D rounded-box SDF on the xz plane, centred on
+ *                                   the terrain. Dissolves the edges of the diorama
+ *                                   wherever the camera happens to be.
+ *                           haze  — distance from the eye, capped below 1. This is
+ *                                   the depth cue: without it two landforms at
+ *                                   different distances but similar positions take
+ *                                   identical fog and read as a single silhouette.
  *
  * Registered into THREE.ShaderChunk so both ShaderMaterial and RawShaderMaterial
  * can `#include <lusionFog>` (three resolves includes for raw materials too).
@@ -28,6 +33,19 @@ uniform vec2 u_fogBox;
 uniform float u_fogRadius;
 uniform float u_fogStart;
 uniform float u_fogRange;
+
+// Where the stage box sits. Deliberately *not* tied to the terrain's centre: with the
+// camera looking down -z, an origin-offset box is what dissolves the far horizon, because
+// the ground reaches further back than the box does. Re-centring it on the terrain drops
+// the stage term to zero everywhere and the horizon ends on a hard cut instead of melting
+// into sky. Left as a tunable so a sculpt placed somewhere unusual can be re-fitted.
+uniform vec2 u_fogCentre;
+
+// Aerial perspective. u_hazeAmount caps it below 1 so distance tints and flattens the
+// far ground without erasing it — full dissolve stays the stage term's job.
+uniform float u_hazeStart;
+uniform float u_hazeRange;
+uniform float u_hazeAmount;
 
 #define RECIPROCAL_PI 0.3183098861837907
 #define RECIPROCAL_PI2 0.15915494309189535
@@ -53,9 +71,14 @@ vec3 applyFog(vec3 color, vec3 worldPosition) {
 	vec3 nToCamera = normalize(toCamera);
 
 	vec3 fogColor = texture2D(u_envTexture, equirectUv(nToCamera)).rgb;
-	float d = sdRoundedBox(worldPosition.xz, u_fogBox, u_fogRadius);
-	float fog = clamp((d - u_fogStart) / max(0.001, u_fogRange), 0.0, 1.0);
-	color = mix(color, fogColor, vec3(fog));
+
+	float d = sdRoundedBox(worldPosition.xz - u_fogCentre, u_fogBox, u_fogRadius);
+	float stage = clamp((d - u_fogStart) / max(0.001, u_fogRange), 0.0, 1.0);
+
+	float t = clamp((length(toCamera) - u_hazeStart) / max(0.001, u_hazeRange), 0.0, 1.0);
+	float haze = t * t * (3.0 - 2.0 * t) * u_hazeAmount;
+
+	color = mix(color, fogColor, vec3(max(stage, haze)));
 	return color;
 }
 

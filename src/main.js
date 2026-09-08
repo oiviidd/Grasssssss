@@ -34,7 +34,9 @@ import { Grass } from './Grass.js';
 import { Flowers } from './Flowers.js';
 import { Insects } from './Insects.js';
 import { exportGLB, exportOBJ, loadCustomTerrain } from './TerrainIO.js';
-import { SHOT, INSECTS, GRASS, FOG } from './shot.js';
+import { Mountain, createMountainGeometry, bakeMountainMap } from './Mountain.js';
+import { Cabin } from './Cabin.js';
+import { SHOT, INSECTS, GRASS, FOG, MOUNTAIN, CABIN, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
 import { pickFile, parseGLB, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
 
@@ -124,9 +126,13 @@ const uniforms = {
 	// Fog shape. Every material that includes <lusionFog> needs these, so they live on the
 	// shared object and are merged in wherever a material is built.
 	u_fogBox: { value: new THREE.Vector2( FOG.boxSize, FOG.boxSize ) },
+	u_fogCentre: { value: new THREE.Vector2( FOG.centre[ 0 ], FOG.centre[ 1 ] ) },
 	u_fogRadius: { value: FOG.radius },
 	u_fogStart: { value: FOG.start },
 	u_fogRange: { value: FOG.range },
+	u_hazeStart: { value: FOG.hazeStart },
+	u_hazeRange: { value: FOG.hazeRange },
+	u_hazeAmount: { value: FOG.hazeAmount },
 
 	u_terrainInfoTexture: { value: null },
 	u_terrainGrassTexture: { value: null },
@@ -233,6 +239,8 @@ function loadTexture( file, options ) {
 
 const grass = new Grass( uniforms );
 const flowers = new Flowers( uniforms );
+const mountain = new Mountain( uniforms );
+const cabin = new Cabin( uniforms );
 
 const jobs = [
 	[ 'sky', () => loadTexture( 'sky.jpg', { flipY: false, wrap: THREE.MirroredRepeatWrapping } ) ],
@@ -317,9 +325,13 @@ function build( assets ) {
 				u_noiseTexture: { value: assets.noise },
 				u_envTexture: uniforms.u_envTexture,
 				u_fogBox: uniforms.u_fogBox,
+				u_fogCentre: uniforms.u_fogCentre,
 				u_fogRadius: uniforms.u_fogRadius,
 				u_fogStart: uniforms.u_fogStart,
-				u_fogRange: uniforms.u_fogRange
+				u_fogRange: uniforms.u_fogRange,
+				u_hazeStart: uniforms.u_hazeStart,
+				u_hazeRange: uniforms.u_hazeRange,
+				u_hazeAmount: uniforms.u_hazeAmount
 			},
 			vertexShader: skyVert,
 			fragmentShader: skyFrag,
@@ -329,15 +341,24 @@ function build( assets ) {
 	skyMesh.frustumCulled = false;
 	scene.add( skyMesh );
 
+	/* the mountain ------------------------------------------------------------ */
+
+	buildMountain();
+	scene.add( mountain.container );
+
 	/* ground ------------------------------------------------------------------ */
 
 	terrainMesh = new THREE.Mesh( hillGeometry, new THREE.ShaderMaterial( {
 		uniforms: {
 			u_envTexture: uniforms.u_envTexture,
 			u_fogBox: uniforms.u_fogBox,
+			u_fogCentre: uniforms.u_fogCentre,
 			u_fogRadius: uniforms.u_fogRadius,
 			u_fogStart: uniforms.u_fogStart,
 			u_fogRange: uniforms.u_fogRange,
+			u_hazeStart: uniforms.u_hazeStart,
+			u_hazeRange: uniforms.u_hazeRange,
+			u_hazeAmount: uniforms.u_hazeAmount,
 			u_terrainInfoTexture: uniforms.u_terrainInfoTexture,
 			u_terrainGrassTexture: uniforms.u_terrainGrassTexture,
 			u_terrainRocksTexture: uniforms.u_terrainRocksTexture,
@@ -379,6 +400,11 @@ function build( assets ) {
 
 	insects.build( surface, INSECTS );
 	scene.add( insects.container );
+
+	/* the cabin --------------------------------------------------------------- */
+
+	buildCabin();
+	scene.add( cabin.container );
 
 	/* go ---------------------------------------------------------------------- */
 
@@ -528,6 +554,54 @@ const tuned = {
 	fogBox: FOG.boxSize,
 	fogStart: FOG.start,
 	fogRange: FOG.range,
+	mountainDistance: MOUNTAIN.distance,
+	mountainSummitY: MOUNTAIN.summitY,
+	mountainRadius: MOUNTAIN.radius,
+	mountainHeight: MOUNTAIN.height,
+	mountainProfile: MOUNTAIN.profile,
+	mountainRidge: MOUNTAIN.ridgeAmount,
+	mountainSnowLine: MOUNTAIN.snowLine,
+	mountainRockWarmth: MOUNTAIN.rockWarmth,
+	mountainTongueLength: MOUNTAIN.tongueLength,
+	mountainTongueCount: MOUNTAIN.tongueCount,
+	mountainBaseMist: MOUNTAIN.baseMist,
+	mountainBaseMistHeight: MOUNTAIN.baseMistHeight,
+	mountainLightWrap: MOUNTAIN.lightWrap,
+	mountainSnowBrightness: 1,
+	mountainSnowShade: 1,
+	mountainRockContrast: 1,
+
+	cabinDistance: CABIN.distance,
+	cabinYaw: CABIN.yaw,
+	cabinSink: CABIN.sink,
+	cabinWidth: CABIN.width,
+	cabinHeight: CABIN.height,
+	cabinDepth: CABIN.depth,
+	cabinDoorWidth: CABIN.doorWidth,
+	cabinDoorHeight: CABIN.doorHeight,
+	cabinDoorOffsetX: CABIN.doorOffsetX,
+	cabinOrnamentSize: CABIN.ornamentSize,
+	cabinOrnamentRays: CABIN.ornamentRays,
+	cabinOrnamentSwirl: CABIN.ornamentSwirl,
+	cabinLampSize: CABIN.lampSize,
+	cabinWeathering: CABIN.weathering,
+	cabinGrain: CABIN.grain,
+	cabinExposure: CABIN.exposure,
+	cabinLightWrap: CABIN.lightWrap,
+	cabinLightTint: CABIN.lightTint,
+	cabinFaceTint: CABIN.faceTint,
+	mountainExposure: MOUNTAIN.exposure,
+	mountainHaze: MOUNTAIN.haze,
+	mountainLightTint: MOUNTAIN.lightTint,
+
+	minHFov: RESPONSIVE.minHorizontalFov,
+	maxFov: RESPONSIVE.maxFov,
+
+	fogCentreX: FOG.centre[ 0 ],
+	fogCentreZ: FOG.centre[ 1 ],
+	hazeStart: FOG.hazeStart,
+	hazeRange: FOG.hazeRange,
+	hazeAmount: FOG.hazeAmount,
 
 	grassExtent: rimRadius,
 	rimFade: rimFade,
@@ -604,12 +678,17 @@ function applyTunedCamera() {
 		cameraDistance: SHOT.camera.cameraDistance
 	} );
 
-	if ( camera.fov !== tuned.fov ) {
+	const fov = fovForAspect( camera.aspect );
 
-		camera.fov = tuned.fov;
+	if ( camera.fov !== fov ) {
+
+		camera.fov = fov;
 		camera.updateProjectionMatrix();
 
 	}
+
+	placeMountain();
+	placeCabin();
 
 }
 
@@ -638,7 +717,37 @@ export const FOG = {
 	boxSize: ${f( tuned.fogBox, 2 )},
 	radius: ${FOG.radius},
 	start: ${f( tuned.fogStart, 2 )},
-	range: ${f( tuned.fogRange, 2 )}
+	range: ${f( tuned.fogRange, 2 )},
+	centre: [ ${f( tuned.fogCentreX, 2 )}, ${f( tuned.fogCentreZ, 2 )} ],
+	hazeStart: ${f( tuned.hazeStart, 2 )},
+	hazeRange: ${f( tuned.hazeRange, 2 )},
+	hazeAmount: ${f( tuned.hazeAmount, 3 )}
+};
+
+export const MOUNTAIN = {
+	distance: ${f( tuned.mountainDistance, 2 )},
+	summitY: ${f( tuned.mountainSummitY, 2 )},
+	radius: ${f( tuned.mountainRadius, 2 )},
+	height: ${f( tuned.mountainHeight, 2 )},
+	profile: ${f( tuned.mountainProfile, 2 )},
+	ridgeAmount: ${f( tuned.mountainRidge, 3 )},
+	snowLine: ${f( tuned.mountainSnowLine, 3 )},
+	rockWarmth: ${f( tuned.mountainRockWarmth, 2 )},
+	tongueLength: ${f( tuned.mountainTongueLength, 2 )},
+	tongueCount: ${Math.round( tuned.mountainTongueCount )},
+	baseMist: ${f( tuned.mountainBaseMist, 2 )},
+	baseMistHeight: ${f( tuned.mountainBaseMistHeight, 2 )},
+	exposure: ${f( tuned.mountainExposure, 2 )},
+	haze: ${f( tuned.mountainHaze, 3 )},
+	lightWrap: ${MOUNTAIN.lightWrap},
+	lightTint: ${f( tuned.mountainLightTint, 2 )},
+	wide: { aspect: ${MOUNTAIN.wide.aspect}, anchorX: ${MOUNTAIN.wide.anchorX}, width: ${MOUNTAIN.wide.width}, height: ${MOUNTAIN.wide.height} },
+	narrow: { aspect: ${MOUNTAIN.narrow.aspect}, anchorX: ${MOUNTAIN.narrow.anchorX}, width: ${MOUNTAIN.narrow.width}, height: ${MOUNTAIN.narrow.height} }
+};
+
+export const RESPONSIVE = {
+	minHorizontalFov: ${f( tuned.minHFov, 1 )},
+	maxFov: ${f( tuned.maxFov, 1 )}
 };
 
 export const GRASS = {
@@ -700,11 +809,77 @@ function buildTweakPanel( texture ) {
 
 			}
 
-			if ( key.startsWith( 'fog' ) ) {
+			if ( key === 'minHFov' || key === 'maxFov' ) {
 
-				uniforms.u_fogBox.value.set( tuned.fogBox, tuned.fogBox );
-				uniforms.u_fogStart.value = tuned.fogStart;
-				uniforms.u_fogRange.value = tuned.fogRange;
+				applyTunedCamera();
+				return;
+
+			}
+
+			if ( key === 'mountainDistance' || key === 'mountainSummitY' ) {
+
+				placeMountain();
+				return;
+
+			}
+
+			// Pure look — no geometry or map to regenerate, so push straight at the uniform.
+			const liveMountain = {
+				mountainExposure: 'u_exposure',
+				mountainHaze: 'u_haze',
+				mountainLightTint: 'u_lightTint',
+				mountainBaseMist: 'u_baseMist',
+				mountainBaseMistHeight: 'u_baseMistHeight',
+				mountainLightWrap: 'u_lightWrap'
+			};
+
+			if ( liveMountain[ key ] ) {
+
+				mountain.set( liveMountain[ key ], value );
+				return;
+
+			}
+
+			if ( key === 'cabinDistance' || key === 'cabinYaw' || key === 'cabinSink' ) {
+
+				placeCabin();
+				return;
+
+			}
+
+			const liveCabin = {
+				cabinExposure: 'u_exposure',
+				cabinLightWrap: 'u_lightWrap',
+				cabinLightTint: 'u_lightTint',
+				cabinFaceTint: 'u_faceTint'
+			};
+
+			if ( liveCabin[ key ] ) {
+
+				cabin.set( liveCabin[ key ], value );
+				return;
+
+			}
+
+			if ( key.startsWith( 'cabin' ) ) {
+
+				// size, door or paint — the geometry and the maps have to be regenerated
+				buildCabin();
+				return;
+
+			}
+
+			if ( key.startsWith( 'mountain' ) ) {
+
+				// shape or snow line — the geometry and the map have to be regenerated
+				buildMountain();
+				return;
+
+			}
+
+			if ( key.startsWith( 'fog' ) || key.startsWith( 'haze' ) ) {
+
+				applyTunedFog();
 				return;
 
 			}
@@ -739,6 +914,54 @@ function buildTweakPanel( texture ) {
 		.slider( 'fogBox', 'clear extent', tuned.fogBox, 1.5, 6, 0.05 )
 		.slider( 'fogStart', 'fade start', tuned.fogStart, 0, 4, 0.05 )
 		.slider( 'fogRange', 'fade softness', tuned.fogRange, 0.05, 3, 0.05 )
+		.slider( 'fogCentreX', 'fog centre x', tuned.fogCentreX, - 5, 5, 0.1 )
+		.slider( 'fogCentreZ', 'fog centre z', tuned.fogCentreZ, - 5, 5, 0.1 )
+		.slider( 'hazeStart', 'haze start', tuned.hazeStart, 0, 14, 0.1 )
+		.slider( 'hazeRange', 'haze range', tuned.hazeRange, 0.5, 20, 0.1 )
+		.slider( 'hazeAmount', 'haze strength', tuned.hazeAmount, 0, 1, 0.01 )
+		.group( 'Mountain' )
+		.slider( 'mountainDistance', 'distance', tuned.mountainDistance, 6, 14, 0.1 )
+		.slider( 'mountainSummitY', 'peak height', tuned.mountainSummitY, - 1, 6, 0.05 )
+		.slider( 'mountainRadius', 'width', tuned.mountainRadius, 1, 9, 0.1 )
+		.slider( 'mountainHeight', 'height', tuned.mountainHeight, 0.5, 8, 0.1 )
+		.slider( 'mountainProfile', 'flank curve', tuned.mountainProfile, 1, 2.6, 0.05 )
+		.slider( 'mountainRidge', 'ridges', tuned.mountainRidge, 0, 0.5, 0.01 )
+		.slider( 'mountainSnowLine', 'snow line', tuned.mountainSnowLine, 0.1, 0.95, 0.01 )
+		.slider( 'mountainRockWarmth', 'rock warmth', tuned.mountainRockWarmth, 0, 1, 0.01, 'rebuild' )
+		.slider( 'mountainTongueLength', 'snow tongues', tuned.mountainTongueLength, 0, 0.8, 0.01, 'rebuild' )
+		.slider( 'mountainTongueCount', 'tongue count', tuned.mountainTongueCount, 4, 30, 1, 'rebuild' )
+		.slider( 'mountainBaseMist', 'base mist', tuned.mountainBaseMist, 0, 1, 0.01 )
+		.slider( 'mountainBaseMistHeight', 'mist height', tuned.mountainBaseMistHeight, 0.05, 1, 0.01 )
+		.slider( 'mountainExposure', 'brightness', tuned.mountainExposure, 0.1, 3, 0.05 )
+		.slider( 'mountainHaze', 'haze', tuned.mountainHaze, 0, 1, 0.01 )
+		.slider( 'mountainLightTint', 'sky tint', tuned.mountainLightTint, 0, 1, 0.01 )
+		.slider( 'mountainLightWrap', 'light wrap', tuned.mountainLightWrap, 0, 1, 0.01 )
+		.slider( 'mountainSnowBrightness', 'snow brightness', tuned.mountainSnowBrightness, 0.3, 1.4, 0.01, 'rebuild' )
+		.slider( 'mountainSnowShade', 'snow shade', tuned.mountainSnowShade, 0.2, 1.6, 0.01, 'rebuild' )
+		.slider( 'mountainRockContrast', 'rock contrast', tuned.mountainRockContrast, 0, 2, 0.01, 'rebuild' )
+		.group( 'Cabin' )
+		.slider( 'cabinDistance', 'distance', tuned.cabinDistance, 1, 6, 0.05 )
+		.slider( 'cabinYaw', 'turn', tuned.cabinYaw, - 1.4, 1.4, 0.01 )
+		.slider( 'cabinSink', 'ground offset', tuned.cabinSink, - 2.5, 1, 0.01 )
+		.slider( 'cabinWidth', 'width', tuned.cabinWidth, 0.8, 6, 0.05, 'rebuild' )
+		.slider( 'cabinHeight', 'height', tuned.cabinHeight, 1, 6, 0.05, 'rebuild' )
+		.slider( 'cabinDepth', 'depth', tuned.cabinDepth, 0.5, 6, 0.05, 'rebuild' )
+		.slider( 'cabinDoorWidth', 'door width', tuned.cabinDoorWidth, 0.3, 1.6, 0.01, 'rebuild' )
+		.slider( 'cabinDoorHeight', 'door height', tuned.cabinDoorHeight, 0.8, 3, 0.01, 'rebuild' )
+		.slider( 'cabinDoorOffsetX', 'door across wall', tuned.cabinDoorOffsetX, - 2.5, 2.5, 0.01, 'rebuild' )
+		.slider( 'cabinOrnamentSize', 'sun size', tuned.cabinOrnamentSize, 0.05, 0.4, 0.01, 'rebuild' )
+		.slider( 'cabinOrnamentRays', 'sun rays', tuned.cabinOrnamentRays, 4, 16, 1, 'rebuild' )
+		.slider( 'cabinOrnamentSwirl', 'sun swirl', tuned.cabinOrnamentSwirl, 0, 1.4, 0.01, 'rebuild' )
+		.slider( 'cabinLampSize', 'lamp size', tuned.cabinLampSize, 0, 1, 0.01, 'rebuild' )
+		.slider( 'cabinWeathering', 'paint wear', tuned.cabinWeathering, 0, 1, 0.01, 'rebuild' )
+		.slider( 'cabinGrain', 'door grain', tuned.cabinGrain, 0, 0.8, 0.01, 'rebuild' )
+		.slider( 'cabinExposure', 'brightness', tuned.cabinExposure, 0.2, 4, 0.05 )
+		.slider( 'cabinLightWrap', 'light wrap', tuned.cabinLightWrap, 0, 1, 0.01 )
+		.slider( 'cabinLightTint', 'sky tint', tuned.cabinLightTint, 0, 1, 0.01 )
+		.slider( 'cabinFaceTint', 'corner shading', tuned.cabinFaceTint, 0, 0.8, 0.01 )
+		.group( 'Responsive' )
+		.slider( 'minHFov', 'min horizontal fov', tuned.minHFov, 8, 40, 0.5 )
+		.slider( 'maxFov', 'max vertical fov', tuned.maxFov, 30, 75, 0.5 )
 		.group( 'Grade' )
 		.slider( 'vignetteFrom', 'vignette start', tuned.vignetteFrom, 0, 1.5, 0.01 )
 		.slider( 'vignetteTo', 'vignette end', tuned.vignetteTo, 0.2, 2.5, 0.01 )
@@ -764,11 +987,39 @@ function buildTweakPanel( texture ) {
 			{ label: 'Import flower sheet', onClick: p => importFlowerAtlas( p ) },
 			{ label: 'Export flower sheet', onClick: p => exportFlowerAtlas( p ) }
 		] )
+		.buttons( [
+			{ label: 'Import mountain', onClick: p => importMountain( p ) },
+			{ label: 'Export mountain', onClick: p => exportPart( p, mountain.mesh && mountain.mesh.geometry, 'mountain.glb' ) }
+		] )
+		.buttons( [
+			{ label: 'Import mountain map', onClick: p => importMountainMap( p ) },
+			{ label: 'Export mountain map', onClick: p => exportMountainMap( p ) }
+		] )
+		.buttons( [
+			{ label: 'Import cabin wall', onClick: p => importCabinPart( p, 'wall' ) },
+			{ label: 'Export cabin wall', onClick: p => exportPart( p, cabin.wall && cabin.wall.geometry, 'cabin-wall.glb' ) }
+		] )
+		.buttons( [
+			{ label: 'Import cabin door', onClick: p => importCabinPart( p, 'door' ) },
+			{ label: 'Export cabin door', onClick: p => exportPart( p, cabin.door && cabin.door.geometry, 'cabin-door.glb' ) }
+		] )
+		.buttons( [
+			{ label: 'Import wall paint', onClick: p => importCabinMap( p, 'wall' ) },
+			{ label: 'Export wall paint', onClick: p => exportCabinMap( p, 'wall' ) }
+		] )
+		.buttons( [
+			{ label: 'Import door paint', onClick: p => importCabinMap( p, 'door' ) },
+			{ label: 'Export door paint', onClick: p => exportCabinMap( p, 'door' ) }
+		] )
 		.note( 'Requirements for imported files', [
 			'<b>Hill</b> &mdash; <code>.glb</code>. Y up, Z forward (Blender glTF default). Position and size are free: the stage the terrain maps cover is fitted to the mesh on import, so an off-centre sculpt still gets colour and grass edge to edge. Keep height within roughly <code>&plusmn;1</code> unit &mdash; blades are only 0.08&ndash;0.30 tall and that ratio is what sells the scale. The fog box stays on the origin, so a hill far from it hazes lopsidedly until the fog sliders are retuned. Apply modifiers, export normals.',
 			'<b>Blade</b> &mdash; <code>.glb</code>, one small mesh. Model a <i>single</i> blade standing on the origin and pointing +Y. Size and position do not matter: it is re-based to 0&ndash;1 in Y on import, because the shader uses <code>position.y</code> directly as the bend ratio. Keep it very low poly &mdash; this is drawn 150k+ times; the original is 7 vertices. Flat cards work best. Two-sided is automatic.',
 			'<b>Tuft</b> &mdash; <code>.glb</code>. <b>One</b> clump of tall grass, standing on the origin pointing +Y, re-based the same way. Export gives you a single clump for exactly this reason: whatever you send back is treated as one tuft and scattered, so do not model a whole field. A few hundred vertices is fine; it is drawn a few thousand times, and total tuft vertices are capped, so a heavy clump lowers the count that fits. Silhouette matters more than detail &mdash; this is what breaks the skyline.',
 			'<b>Flower sheet</b> &mdash; <code>.png</code> with alpha. A single horizontal strip of flowers, evenly divided, each cell drawn on a quad standing on its base. Export gives you the current sheet (750&times;256, 5 cells) to paint over. Set <i>atlas cells</i> to however many are in your strip. Each cell is about 3:5, taller than wide. Transparent background &mdash; anything under 0.4% alpha is discarded.',
+			'<b>Mountain</b> &mdash; <code>.glb</code>, <b>UV mapped</b> (the import is refused without one). Unlike the blade and tuft it is <i>not</i> rescaled: its real size sets how big it reads in frame, so model it at roughly <code>8</code> units across and <code>3.5</code> tall and stand it on the origin pointing +Y. Detail belongs in the map, not the mesh &mdash; it sits 12 units away behind haze. Importing one retires the width/height/flank sliders.',
+			'<b>Mountain map</b> &mdash; <code>.png</code>, cylindrical unwrap: <code>u</code> goes around the cone, <code>v</code> runs base&rarr;summit. Export gives you the generated one (1024&times;512) to paint over. Paint it <i>dark</i> &mdash; the beauty pass is near-black by design and the grade is what lifts it, so a map painted at normal screen brightness comes out blown.',
+			'<b>Cabin wall / door</b> &mdash; <code>.glb</code>, <b>UV mapped</b>. Not rescaled: model the wall standing <i>on</i> the origin (its base at y&nbsp;=&nbsp;0, not centred on it) and the door as a flat leaf facing +Z, roughly <code>0.33 &times; 0.78</code> units to match the generated pair. The door is a separate mesh because it is the click target &mdash; keep it separate. Importing either retires the size sliders for that piece.',
+			'<b>Wall / door paint</b> &mdash; <code>.png</code>. Export gives you the generated maps to paint over. The door map is the whole leaf: architrave, panels, grain, the sun and the handle, with <code>u</code> across and <code>v</code> bottom&rarr;top. Paint <i>dark and heavily saturated</i> &mdash; the grade screens a cyan tint over every pixel, so a red that looks right in Photoshop arrives on screen as dusty pink.',
 			'Exports carry position and normals only. Internal attributes are stripped, because three writes anything it does not recognise as an integer custom accessor and Blender refuses the file when it meets one.',
 			'Imports are live and temporary &mdash; nothing is written to the project. To keep one, hand the file to the developer; the hill also loads automatically from <code>assets/models/terrain_custom.glb</code>.'
 		] )
@@ -969,6 +1220,136 @@ async function importTuft( panel ) {
 
 }
 
+async function importMountain( panel ) {
+
+	const geometry = await readGLB( panel, 'Mountain' );
+	if ( ! geometry ) return;
+
+	// Kept unnormalised, unlike the blade and tuft: the cone's real size is what sets its
+	// angular size in frame, and rescaling it to a unit box would throw that away.
+	if ( ! geometry.attributes.uv ) {
+
+		panel.say( 'Mountain needs a UV map — the albedo is sampled from it. Unwrap it in Blender and re-export.' );
+		return;
+
+	}
+
+	mountainGeometry = geometry;
+	buildMountain();
+
+	geometry.computeBoundingBox();
+	const size = geometry.boundingBox.getSize( new THREE.Vector3() );
+	panel.say( `Mountain loaded (${size.x.toFixed( 1 )}×${size.y.toFixed( 1 )}×${size.z.toFixed( 1 )} units). The width/height/flank sliders no longer apply — reload to go back to the generated cone.` );
+
+}
+
+async function importMountainMap( panel ) {
+
+	const file = await pickFile( 'image/*' );
+	if ( ! file ) return;
+
+	try {
+
+		mountainMap = await loadImageTexture( file );
+		mountainMap.wrapS = THREE.RepeatWrapping;
+		buildMountain();
+		panel.say( 'Mountain map loaded — the snow line slider no longer applies.' );
+
+	} catch ( error ) {
+
+		console.error( error );
+		panel.say( 'Mountain map failed to load.' );
+
+	}
+
+}
+
+async function exportMountainMap( panel ) {
+
+	try {
+
+		const { width, height } = await exportTexturePNG( mountain.map, 'mountain-map.png' );
+		panel.say( `Saved mountain-map.png (${width}x${height}).` );
+
+	} catch ( error ) {
+
+		console.error( error );
+		panel.say( 'Export failed: ' + error.message );
+
+	}
+
+}
+
+async function importCabinPart( panel, which ) {
+
+	const geometry = await readGLB( panel, which === 'wall' ? 'Cabin wall' : 'Cabin door' );
+	if ( ! geometry ) return;
+
+	if ( ! geometry.attributes.uv ) {
+
+		panel.say( 'That mesh has no UV map — the paint is sampled from it. Unwrap it in Blender and re-export.' );
+		return;
+
+	}
+
+	// Kept at its authored size and origin, like the mountain and unlike the blade: the
+	// cabin's real dimensions are what set how big it reads, and the door has to line up
+	// with the hole in the wall.
+	if ( which === 'wall' ) cabinWallGeometry = geometry;
+	else cabinDoorGeometry = geometry;
+
+	buildCabin();
+
+	geometry.computeBoundingBox();
+	const size = geometry.boundingBox.getSize( new THREE.Vector3() );
+	panel.say( `Cabin ${which} loaded (${size.x.toFixed( 2 )}×${size.y.toFixed( 2 )}×${size.z.toFixed( 2 )} units). Its size sliders no longer apply — reload to go back to the generated one.` );
+
+}
+
+async function importCabinMap( panel, which ) {
+
+	const file = await pickFile( 'image/*' );
+	if ( ! file ) return;
+
+	try {
+
+		const map = await loadImageTexture( file );
+
+		if ( which === 'wall' ) cabinWallMap = map;
+		else cabinDoorMap = map;
+
+		buildCabin();
+		panel.say( `Cabin ${which} map loaded — the sliders that paint it no longer apply.` );
+
+	} catch ( error ) {
+
+		console.error( error );
+		panel.say( 'Cabin map failed to load.' );
+
+	}
+
+}
+
+async function exportCabinMap( panel, which ) {
+
+	const mesh = which === 'wall' ? cabin.wall : cabin.door;
+	if ( ! mesh ) return panel.say( 'nothing to export yet' );
+
+	try {
+
+		const name = 'cabin-' + which + '.png';
+		const { width, height } = await exportTexturePNG( mesh.material.uniforms.u_map.value, name );
+		panel.say( `Saved ${name} (${width}x${height}).` );
+
+	} catch ( error ) {
+
+		console.error( error );
+		panel.say( 'Export failed: ' + error.message );
+
+	}
+
+}
+
 async function importFlowerAtlas( panel ) {
 
 	const file = await pickFile( 'image/*' );
@@ -997,16 +1378,72 @@ async function importFlowerAtlas( panel ) {
  * the ones it recognises — tolerant of comments, trailing commas and the array syntax in
  * the camera block, none of which JSON.parse would survive.
  */
+/**
+ * Body of `export const NAME = { … };`.
+ *
+ * Non-greedy up to a `};` at the start of a line, so the inline braces on MOUNTAIN's
+ * `wide:` / `narrow:` rows do not end the block early.
+ */
+function configBlock( text, name ) {
+
+	// Plain string search rather than a built RegExp: `'\\s'` inside a JS string literal is
+	// just `s`, so a dynamically assembled pattern here silently matches nothing and every
+	// block-scoped value quietly falls back to its default.
+	const start = text.indexOf( 'const ' + name );
+	if ( start < 0 ) return '';
+
+	const open = text.indexOf( '{', start );
+	const end = text.indexOf( '\n};', open );
+
+	if ( open < 0 || end < 0 ) return '';
+
+	// Strip nested objects. MOUNTAIN's wide/narrow layouts carry their own `width` and
+	// `height`, and a flat scan lets those shadow the cone's — the last one wins, so the
+	// mountain came back 0.94 units tall on every config import.
+	return text.slice( open + 1, end ).replace( /\{[^{}]*\}/g, '' );
+
+}
+
+/** `key: number` pairs out of one block, renamed through `aliases` on the way. */
+function scalarsFrom( source, aliases = {} ) {
+
+	const out = {};
+
+	for ( const match of source.matchAll( /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?[\d.]+)/g ) ) {
+
+		out[ aliases[ match[ 1 ] ] || match[ 1 ] ] = Number( match[ 2 ] );
+
+	}
+
+	return out;
+
+}
+
 function applyConfigText( panel, text, source ) {
 
 	try {
 
-		const numbers = {};
-		for ( const match of text.matchAll( /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?[\d.]+)/g ) ) {
+		// Loose pass first, for the camera and grade values that sit outside any block, then
+		// each block on its own. Blocks have to be scoped: FOG and MOUNTAIN both carry a
+		// `radius`, and a flat scan would let whichever appears last silently win.
+		const numbers = scalarsFrom( text );
 
-			numbers[ match[ 1 ] ] = Number( match[ 2 ] );
-
-		}
+		Object.assign( numbers,
+			scalarsFrom( configBlock( text, 'FOG' ), {
+				boxSize: 'fogBox', start: 'fogStart', range: 'fogRange'
+			} ),
+			scalarsFrom( configBlock( text, 'RESPONSIVE' ), {
+				minHorizontalFov: 'minHFov'
+			} ),
+			scalarsFrom( configBlock( text, 'MOUNTAIN' ), {
+				distance: 'mountainDistance', summitY: 'mountainSummitY', radius: 'mountainRadius',
+				height: 'mountainHeight', profile: 'mountainProfile', ridgeAmount: 'mountainRidge',
+				snowLine: 'mountainSnowLine', rockWarmth: 'mountainRockWarmth',
+				tongueLength: 'mountainTongueLength', tongueCount: 'mountainTongueCount',
+				baseMist: 'mountainBaseMist', baseMistHeight: 'mountainBaseMistHeight',
+				exposure: 'mountainExposure', haze: 'mountainHaze',
+				lightTint: 'mountainLightTint'
+			} ) );
 
 		// the camera block stores arrays, not scalars
 		const position = text.match( /position:\s*\[([^\]]+)\]/ );
@@ -1027,11 +1464,14 @@ function applyConfigText( panel, text, source ) {
 
 		}
 
-		// map the file's own names onto the panel's
-		const aliases = { boxSize: 'fogBox', start: 'fogStart', range: 'fogRange' };
-		for ( const key in aliases ) {
+		// FOG.centre is an array too, and the scalar regex above skips it — without this the
+		// fog centre silently reverts to the origin on every config import.
+		const centre = text.match( /centre:\s*\[([^\]]+)\]/ );
 
-			if ( numbers[ key ] !== undefined ) numbers[ aliases[ key ] ] = numbers[ key ];
+		if ( centre ) {
+
+			const [ x, z ] = toNumbers( centre );
+			Object.assign( numbers, { fogCentreX: x, fogCentreZ: z } );
 
 		}
 
@@ -1053,9 +1493,8 @@ function applyConfigText( panel, text, source ) {
 		}
 
 		applyTunedCamera();
-		uniforms.u_fogBox.value.set( tuned.fogBox, tuned.fogBox );
-		uniforms.u_fogStart.value = tuned.fogStart;
-		uniforms.u_fogRange.value = tuned.fogRange;
+		applyTunedFog();
+		buildMountain();
 
 		scheduleRebuild( 'grass' );
 		setTimeout( () => scheduleRebuild( 'flowers' ), 320 );
@@ -1193,11 +1632,190 @@ function rebuildEverything() {
 
 }
 
+/* ── mountain ──────────────────────────────────────────────────────────────── */
+
+// Artist overrides. Null means "generate it", and the generated one is disposed on every
+// rebuild while an imported one is kept.
+let mountainGeometry = null;
+let mountainMap = null;
+
+let cabinWallGeometry = null;
+let cabinDoorGeometry = null;
+let cabinWallMap = null;
+let cabinDoorMap = null;
+
+function buildMountain() {
+
+	mountain.build( Object.assign( {}, MOUNTAIN, {
+		geometry: mountainGeometry,
+		map: mountainMap,
+		radius: tuned.mountainRadius,
+		height: tuned.mountainHeight,
+		profile: tuned.mountainProfile,
+		ridgeAmount: tuned.mountainRidge,
+		snowLine: tuned.mountainSnowLine,
+		rockWarmth: tuned.mountainRockWarmth,
+		tongueLength: tuned.mountainTongueLength,
+		tongueCount: tuned.mountainTongueCount,
+		baseMist: tuned.mountainBaseMist,
+		baseMistHeight: tuned.mountainBaseMistHeight,
+		lightWrap: tuned.mountainLightWrap,
+		snowBrightness: tuned.mountainSnowBrightness,
+		snowShade: tuned.mountainSnowShade,
+		rockContrast: tuned.mountainRockContrast,
+		exposure: tuned.mountainExposure,
+		haze: tuned.mountainHaze,
+		lightTint: tuned.mountainLightTint
+	} ) );
+
+	placeMountain();
+
+}
+
+/**
+ * Vertical fov that holds a minimum *horizontal* fov.
+ *
+ * three's fov is vertical, so a narrow viewport crops the sides rather than zooming out,
+ * and the mountain and cabin fall out of frame on a phone. Widening the vertical fov is
+ * the only way to buy horizontal room back. Clamped below by the hero shot's own fov, so
+ * a wide desktop viewport keeps exactly the framing everything else was tuned against.
+ */
+function fovForAspect( aspect ) {
+
+	const safe = Number.isFinite( aspect ) && aspect > 0 ? aspect : 1;
+	const halfH = THREE.MathUtils.degToRad( tuned.minHFov ) * 0.5;
+	const needed = THREE.MathUtils.radToDeg(
+		2 * Math.atan( Math.tan( halfH ) / Math.max( 0.05, safe ) ) );
+
+	return THREE.MathUtils.clamp( needed, tuned.fov, tuned.maxFov );
+
+}
+
+/** Interpolates the mountain's framing between the wide and narrow layouts. */
+function mountainLayout( aspect ) {
+
+	const wide = MOUNTAIN.wide;
+	const narrow = MOUNTAIN.narrow;
+	const t = THREE.MathUtils.clamp(
+		( wide.aspect - aspect ) / ( wide.aspect - narrow.aspect ), 0, 1 );
+
+	return {
+		anchorX: THREE.MathUtils.lerp( wide.anchorX, narrow.anchorX, t ),
+		width: THREE.MathUtils.lerp( wide.width, narrow.width, t ),
+		height: THREE.MathUtils.lerp( wide.height, narrow.height, t )
+	};
+
+}
+
+function buildCabin() {
+
+	cabin.build( Object.assign( {}, CABIN, {
+		wallGeometry: cabinWallGeometry,
+		doorGeometry: cabinDoorGeometry,
+		wallMap: cabinWallMap,
+		doorMap: cabinDoorMap,
+		width: tuned.cabinWidth,
+		height: tuned.cabinHeight,
+		depth: tuned.cabinDepth,
+		doorWidth: tuned.cabinDoorWidth,
+		doorHeight: tuned.cabinDoorHeight,
+		doorOffsetX: tuned.cabinDoorOffsetX,
+		ornamentSize: tuned.cabinOrnamentSize,
+		ornamentRays: Math.round( tuned.cabinOrnamentRays ),
+		ornamentSwirl: tuned.cabinOrnamentSwirl,
+		lampSize: tuned.cabinLampSize,
+		weathering: tuned.cabinWeathering,
+		grain: tuned.cabinGrain,
+		exposure: tuned.cabinExposure,
+		lightWrap: tuned.cabinLightWrap,
+		lightTint: tuned.cabinLightTint,
+		faceTint: tuned.cabinFaceTint
+	} ) );
+
+	placeCabin();
+
+}
+
+/** Same wide/narrow interpolation the mountain uses. */
+function layoutFor( config, aspect ) {
+
+	const t = THREE.MathUtils.clamp(
+		( config.wide.aspect - aspect ) / ( config.wide.aspect - config.narrow.aspect ), 0, 1 );
+
+	return {
+		anchorX: THREE.MathUtils.lerp( config.wide.anchorX, config.narrow.anchorX, t ),
+		scale: THREE.MathUtils.lerp( config.wide.scale, config.narrow.scale, t )
+	};
+
+}
+
+function placeCabin() {
+
+	if ( ! cabin.wall ) return;
+
+	const aspect = Number.isFinite( camera.aspect ) && camera.aspect > 0 ? camera.aspect : 1;
+	const layout = layoutFor( CABIN, aspect );
+
+	cabin.place( {
+		position: cameraRig.basePosition,
+		quaternion: cameraRig.baseQuaternion,
+		fov: camera.fov,
+		aspect
+	}, surface, {
+		anchorX: layout.anchorX,
+		scale: layout.scale,
+		distance: tuned.cabinDistance,
+		yaw: tuned.cabinYaw,
+		sink: tuned.cabinSink
+	} );
+
+}
+
+function placeMountain() {
+
+	const aspect = Number.isFinite( camera.aspect ) && camera.aspect > 0 ? camera.aspect : 1;
+	const layout = mountainLayout( aspect );
+
+	// Solved against the rig's *anchor*, not the live camera: the rig adds shake and
+	// mouse-look every frame, and re-solving against those would glue the mountain to the
+	// camera and kill the parallax that is the whole point of it being geometry.
+	mountain.place( {
+		position: cameraRig.basePosition,
+		quaternion: cameraRig.baseQuaternion,
+		fov: camera.fov,
+		aspect
+	}, {
+		anchorX: layout.anchorX,
+		distance: tuned.mountainDistance,
+		// Solved from the summit so the peak sits at the same world height however narrow
+		// the viewport gets and whatever cone an artist has imported.
+		baseY: tuned.mountainSummitY - mountain.modelHeight() * layout.height,
+		width: layout.width,
+		height: layout.height
+	} );
+
+}
+
+/** Push the tuned fog/haze values into the shared uniforms. */
+function applyTunedFog() {
+
+	uniforms.u_fogBox.value.set( tuned.fogBox, tuned.fogBox );
+	uniforms.u_fogCentre.value.set( tuned.fogCentreX, tuned.fogCentreZ );
+	uniforms.u_fogStart.value = tuned.fogStart;
+	uniforms.u_fogRange.value = tuned.fogRange;
+	uniforms.u_hazeStart.value = tuned.hazeStart;
+	uniforms.u_hazeRange.value = tuned.hazeRange;
+	uniforms.u_hazeAmount.value = tuned.hazeAmount;
+
+}
+
 function applyShot() {
 
 	const g = SHOT.grade;
 
 	cameraRig.setAnchor( SHOT.camera );
+	placeMountain();
+	placeCabin();
 	cameraRig.lookStrength = g.cameraLookStrength;
 	cameraRig.shakeStrength = g.cameraShakeStrength;
 
@@ -1269,8 +1887,19 @@ function onResize() {
 	width = Math.floor( window.innerWidth * pixelRatio );
 	height = Math.floor( window.innerHeight * pixelRatio );
 
-	camera.aspect = window.innerWidth / window.innerHeight;
+	// A zero-area viewport is real — a backgrounded tab, and the moment mid-orientation
+	// change on mobile — and 0/0 puts NaN straight into the projection matrix, where it
+	// stays until something happens to resize again.
+	camera.aspect = window.innerHeight > 0 && window.innerWidth > 0
+		? window.innerWidth / window.innerHeight
+		: camera.aspect || 1;
+
+	camera.fov = fovForAspect( camera.aspect );
 	camera.updateProjectionMatrix();
+
+	// Mountain and cabin are both framed in screen space, so a reshape moves them.
+	placeMountain();
+	placeCabin();
 
 	renderer.setSize( window.innerWidth, window.innerHeight );
 	sceneTarget.setSize( width, height );

@@ -138,7 +138,164 @@ export const FOG = {
 	boxSize: 3.6,
 	radius: 1.0,
 	start: 1.9,
-	range: 0.7
+	range: 0.7,
+
+	// The box is offset from the terrain (which centres on z = -2), and that is what makes
+	// the horizon dissolve: the ground reaches z = -7 while the box fades out from 5.5, so
+	// the far rim melts into sky and the foreground stays clear. Centring it on the terrain
+	// zeroes the term everywhere.
+	centre: [ 0, 0 ],
+
+	// Aerial perspective, added because the stage SDF above is position-based: two hills at
+	// different depths but similar distance from the box centre took identical fog and
+	// merged into one silhouette. Held well below 1 — the far hill should read as further
+	// away, not disappear.
+	// 0.35 measured against this shot: it triples the colour distance between the two hills
+	// (26 -> 80 summed RGB) while the foreground and the near hill stay pixel-identical.
+	// 0.45 separates harder but washes the far grass out; 0.25 barely reads.
+	hazeStart: 4.5,
+	hazeRange: 6.5,
+	hazeAmount: 0.35
+};
+
+/**
+ * The distant snow-capped cone, and how it is framed.
+ *
+ * Two kinds of number here, and the distinction matters:
+ *
+ *   world  — distance and baseY. These are what make it read as *far away*: the parallax
+ *            against the camera-locked sky, and how much of it the meadow's ridge hides.
+ *            They never change with the viewport.
+ *   frame  — anchorX and scale, interpolated between a wide and a narrow layout. fov in
+ *            three is vertical, so a portrait phone crops the sides away; a cone pinned to
+ *            a world x simply leaves the shot. anchorX is NDC (-1 left edge, +1 right).
+ *
+ * distance is held under the sky sphere's radius of 15. That sphere is pinned to the
+ * camera and writes depth, so anything past it is occluded by the sky itself.
+ */
+export const MOUNTAIN = {
+	distance: 12,
+
+	// The *summit* height, not the base. Shrinking the cone for a narrow viewport used to
+	// drop its peak below the meadow's ridge and hide it completely; pinning the summit
+	// means scale only narrows the silhouette, and the peak clears the grass by the same
+	// margin on every screen. The base goes wherever it must — the meadow covers it.
+	summitY: 2.5,
+
+	// shape — a stratovolcano, not a party hat: `profile` above 1 steepens the flanks
+	// toward the summit and flares the base.
+	radius: 5.2,
+	height: 4.3,
+	profile: 1.2,
+	ridgeAmount: 0.16,
+
+	// look
+	// Where the unbroken cap ends; below it the snow runs down the gullies as tongues.
+	// The meadow's ridge cuts the cone at about v = 0.60, so the cap has to sit well above
+	// that or there is no rock left to see.
+	snowLine: 0.72,
+	tongueLength: 0.42,
+	tongueCount: 15,
+	// 0 = the reference's cool grey-blue rock, 1 = warm brown.
+	rockWarmth: 1,
+	// The beauty pass is near-black and the grade lifts it, so exposure here is not 1-ish.
+	// Measured on screen after grading: rock lands at [109,102,92], hue 35, sat 0.16 — dark
+	// brown seen through mist, which is how the reference gets its look. (The photo itself
+	// measures hue 202: that is the mist, not the rock.)
+	exposure: 1.6,
+	// Flat distance haze, kept modest so the rock keeps its colour...
+	haze: 0.14,
+	lightWrap: 0.45,
+	lightTint: 0.2,
+
+	// ...and a separate bank of mist around the foot, which is how the reference gets away
+	// with genuinely dark rock while still reading as far off: the base dissolves, the upper
+	// flanks stay saturated. Flat haze alone can only wash the whole cone evenly.
+	baseMist: 0.4,
+	baseMistHeight: 0.45,
+
+	// Framing per viewport shape. anchorX is NDC; width/height scale the cone.
+	//
+	// They are separate on purpose. A narrow viewport needs a narrower cone or it fills the
+	// frame edge to edge — but shrinking it *uniformly* drops the summit behind the meadow's
+	// ridge, and occlusion does not care about fov, so no amount of reframing brings it back.
+	// Squeezing only the width keeps the peak exactly where it was and the base safely
+	// hidden; the cone simply reads as a steeper volcano on a phone.
+	//
+	// The reference frames the cone's centre 23% across a 2:1 image, i.e. NDC -0.54.
+	wide: { aspect: 1.9, anchorX: - 0.54, width: 1, height: 1 },
+	narrow: { aspect: 0.5, anchorX: - 0.34, width: 0.46, height: 0.94 }
+};
+
+/**
+ * The red cabin, and the door that leaves the home page.
+ *
+ * Colours are measured off Reference/kazmos.jpg (wall [118,41,48] hue 354 sat 0.65; door
+ * [44,50,57]; ornament [125,85,54] hue 26; eave [43,74,88]) and then pushed warmer and
+ * brighter than the measurement, because the grade's cyan tint cools the whole frame on
+ * the way out.
+ *
+ * Like the mountain it is framed by a screen anchor rather than a world x — the door is
+ * the only clickable thing on the page, so it must survive a phone cropping the sides.
+ * It sits much closer than the mountain, so it takes the scene's real SDF fog.
+ */
+export const CABIN = {
+	// Kept in *front* of the hill's crest, which sits around z = -1.5. Sizing the cabin from
+	// the reference's door-to-frame ratio alone put it at 7 units, where the meadow simply
+	// buries it — occlusion does not care how well the proportions match. So it stands close
+	// and is built small to suit: on screen that is indistinguishable from a large cabin
+	// further off, and it is the only version the camera can actually see.
+	distance: 3,
+	yaw: - 0.32,
+	sink: 0.02,
+
+	width: 1.1,
+	height: 1.35,
+	depth: 1,
+	eaveOverhang: 0.07,
+	eaveHeight: 0.075,
+
+	doorWidth: 0.33,
+	doorHeight: 0.78,
+	// The door is not centred on the wall: the reference puts it about 12% of the frame in
+	// from the cabin's near corner, with the rest of the building running off the edge.
+	doorOffsetX: - 0.26,
+
+	// Radius of the petal ring as a fraction of the door's width; the tips reach 1.42x it.
+	// The reference's sun is about 39% of the door wide, hence 0.14 rather than 0.2.
+	ornamentSize: 0.14,
+	ornamentRays: 8,
+	ornamentSwirl: 0.55,
+	lampSize: 0.2,
+
+	// look
+	weathering: 0.35,
+	grain: 0.22,
+	exposure: 1.6,
+	lightWrap: 0.35,
+	lightTint: 0.3,
+	// How much darker the side wall reads than the face-on one. This is the corner.
+	faceTint: 0.32,
+	eaveColor: [ 0.130, 0.235, 0.300 ],
+
+	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
+	// +0.49, and lets the rest run off the edge.
+	wide: { aspect: 1.9, anchorX: 1.05, scale: 1 },
+	narrow: { aspect: 0.5, anchorX: 0.78, scale: 0.82 }
+};
+
+/**
+ * Framing on viewports that are not the hero shot's shape.
+ *
+ * fov in three is vertical, so a narrow viewport does not zoom out — it crops the sides.
+ * At 30 degrees vertical a portrait phone (aspect 0.46) sees only 14 degrees horizontally,
+ * which is not enough room for the mountain, the title and the cabin door at once.
+ * Widening the vertical fov buys that room back; the cost is more grass and sky above and
+ * below than the hero framing was tuned for, so it is held to the minimum that works.
+ */
+export const RESPONSIVE = {
+	minHorizontalFov: 22,
+	maxFov: 46
 };
 
 /**
