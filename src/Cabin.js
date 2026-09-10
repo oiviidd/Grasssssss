@@ -319,6 +319,7 @@ export class Cabin {
 				u_exposure: { value: options.exposure !== undefined ? options.exposure : 1.6 },
 				u_lightWrap: { value: options.lightWrap !== undefined ? options.lightWrap : 0.35 },
 				u_lightTint: { value: options.lightTint !== undefined ? options.lightTint : 0.3 },
+				u_unlit: { value: options.unlit !== undefined ? options.unlit : 0 },
 				u_faceTint: { value: options.faceTint !== undefined ? options.faceTint : 0.32 },
 				u_alphaTest: { value: extra.alphaTest !== undefined ? extra.alphaTest : - 1 },
 				u_envTexture: this.uniforms.u_envTexture,
@@ -434,6 +435,17 @@ export class Cabin {
 				depth * 0.5 + 0.02 );
 
 			this.container.add( this.lamp );
+
+		}
+
+		// An imported cabin brings its own roof, lamp and door, so the generated ones are left
+		// out rather than laid over it. The generated door survives only as an invisible hit
+		// target for the click in step 5 — unless the artist supplied a door mesh of their own.
+		if ( importedWall ) {
+
+			if ( this.eave ) this.eave.visible = false;
+			if ( this.lamp ) this.lamp.visible = false;
+			if ( this.door && ! importedDoor ) this.door.visible = false;
 
 		}
 

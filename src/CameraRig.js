@@ -5,8 +5,9 @@
  *   1. mouse look — eased pitch/yaw offsets applied *around a pivot* that sits
  *      `cameraDistance` units in front of the camera, so the framing swings rather
  *      than pans. This is what makes the parallax feel like a physical rig.
- *   2. free look — drag / wheel, added here so the meadow can be inspected. The
- *      original had no such control; it played back a fixed shot list.
+ *   2. free look — orbit/zoom offsets, now always zero. Navigation (orbit, pan, zoom, fly)
+ *      lives in main.js and edits the anchor itself: an offset that reset on every
+ *      setAnchor() was why a shot framed by dragging could never be saved.
  *   3. shake — fractal value noise on position (amplitude 0.12) and rotation
  *      (amplitude 0.003), both at frequency 0.3. Small, but it is the difference
  *      between "3D render" and "handheld".
@@ -149,54 +150,25 @@ export class CameraRig {
 
 	_bind() {
 
-		const el = this.domElement;
-
-		el.addEventListener( 'pointerdown', e => {
-
-			this._dragging = true;
-			this._prev.set( e.clientX, e.clientY );
-			el.setPointerCapture( e.pointerId );
-
-		} );
-
-		el.addEventListener( 'pointerup', e => {
-
-			this._dragging = false;
-			if ( el.hasPointerCapture( e.pointerId ) ) el.releasePointerCapture( e.pointerId );
-
-		} );
-
-		el.addEventListener( 'pointermove', e => {
+		// Only the pointer position is tracked here, for the eased mouse look.
+		this.domElement.addEventListener( 'pointermove', e => {
 
 			this.mouseXY.set(
 				( e.clientX / window.innerWidth ) * 2 - 1,
 				- ( e.clientY / window.innerHeight ) * 2 + 1
 			);
 
-			if ( this._dragging ) {
-
-				this.orbitYaw -= ( e.clientX - this._prev.x ) * 0.0025;
-				this.orbitPitch -= ( e.clientY - this._prev.y ) * 0.0025;
-				this.orbitPitch = Math.max( - 0.7, Math.min( 0.7, this.orbitPitch ) );
-				this._prev.set( e.clientX, e.clientY );
-
-			}
-
 		} );
-
-		el.addEventListener( 'wheel', e => {
-
-			e.preventDefault();
-			this.zoom = Math.max( - 2.5, Math.min( 6, this.zoom + e.deltaY * 0.002 ) );
-
-		}, { passive: false } );
 
 	}
 
 	setAnchor( anchor ) {
 
 		this.basePosition.fromArray( anchor.position );
-		this._e.set( anchor.rotation[ 0 ], anchor.rotation[ 1 ], anchor.rotation[ 2 ], 'XYZ' );
+		// Yaw about the world's up, then pitch about the camera's own x. 'XYZ' pitched about the
+		// *world* x axis, which rolls the horizon as soon as the camera is turned — invisible
+		// while yaw was 0, unavoidable once orbiting swings it round.
+		this._e.set( anchor.rotation[ 0 ], anchor.rotation[ 1 ], anchor.rotation[ 2 ], 'YXZ' );
 		this.baseQuaternion.setFromEuler( this._e );
 		this.cameraDistance = anchor.cameraDistance;
 

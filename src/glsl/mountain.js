@@ -14,6 +14,12 @@
  * distance term would buy nothing.
  */
 export const mountainVert = /* glsl */`
+// The model's own vertical extent, so the foot mist follows real height. It used to read
+// v_uv.y, which only means "height" on the generated cone's cylindrical unwrap; on an
+// artist's UV atlas it is arbitrary and the mist landed in patches all over the mesh.
+uniform vec2 u_modelHeightRange;
+varying float v_heightRatio;
+
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec2 v_uv;
@@ -24,6 +30,8 @@ void main () {
 	v_worldPosition = worldPosition.xyz;
 	v_worldNormal = normalize(mat3(modelMatrix) * normal);
 	v_uv = uv;
+	v_heightRatio = clamp((position.y - u_modelHeightRange.x) /
+		max(0.001, u_modelHeightRange.y - u_modelHeightRange.x), 0.0, 1.0);
 
 	gl_Position = projectionMatrix * viewMatrix * worldPosition;
 }
@@ -36,6 +44,10 @@ uniform float u_haze;
 uniform float u_lightWrap;
 uniform float u_lightTint;
 
+// 1 for a texture with its lighting already painted in: drawn flat, because lighting it
+// again from the sky would shade every shadow twice.
+uniform float u_unlit;
+
 // Mist pooling around the foot of the cone. Separate from u_haze on purpose: the flat haze
 // is distance, this is the band of atmosphere the base sits in, and it is what lets the rock
 // be honestly dark brown while the mountain still reads as far away. Without it the choice is
@@ -46,6 +58,7 @@ uniform float u_baseMistHeight;
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec2 v_uv;
+varying float v_heightRatio;
 
 #include <lusionFog>
 
@@ -63,13 +76,14 @@ void main () {
 	// own luminance keeps the env-lit look while letting the snow stay near-neutral.
 	float lum = dot(light, vec3(0.2126, 0.7152, 0.0722));
 	light = mix(vec3(lum), light, u_lightTint);
+	light = mix(light, vec3(1.0), u_unlit);
 
 	vec3 color = albedo * light * u_exposure;
 
-	// Aerial perspective, toward the sky actually behind the mountain. v_uv.y runs base to
-	// summit, so the mist is thickest at the foot and gone by u_baseMistHeight.
+	// Aerial perspective, toward the sky actually behind the mountain. v_heightRatio runs base
+	// to summit, so the mist is thickest at the foot and gone by u_baseMistHeight.
 	vec3 skyColor = sampleSky(normalize(v_worldPosition - cameraPosition));
-	float mist = u_baseMist * (1.0 - smoothstep(0.0, max(0.001, u_baseMistHeight), v_uv.y));
+	float mist = u_baseMist * (1.0 - smoothstep(0.0, max(0.001, u_baseMistHeight), v_heightRatio));
 
 	color = mix(color, skyColor, clamp(u_haze + mist, 0.0, 1.0));
 

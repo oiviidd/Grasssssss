@@ -272,6 +272,7 @@ export class Mountain {
 
 		this.ownsGeometry = ! options.geometry;
 		const geometry = options.geometry || createMountainGeometry( options );
+		geometry.computeBoundingBox();
 
 		if ( options.map ) {
 
@@ -292,6 +293,8 @@ export class Mountain {
 				u_haze: { value: options.haze !== undefined ? options.haze : 0.42 },
 				u_lightWrap: { value: options.lightWrap !== undefined ? options.lightWrap : 0.45 },
 				u_lightTint: { value: options.lightTint !== undefined ? options.lightTint : 0.45 },
+				u_unlit: { value: options.unlit !== undefined ? options.unlit : 0 },
+				u_modelHeightRange: { value: new THREE.Vector2( geometry.boundingBox.min.y, geometry.boundingBox.max.y ) },
 				u_baseMist: { value: options.baseMist !== undefined ? options.baseMist : 0.55 },
 				u_baseMistHeight: { value: options.baseMistHeight !== undefined ? options.baseMistHeight : 0.45 },
 				u_envTexture: this.uniforms.u_envTexture
@@ -339,6 +342,24 @@ export class Mountain {
 		if ( ! geometry.boundingBox ) geometry.computeBoundingBox();
 
 		return Math.max( 1e-6, geometry.boundingBox.max.y - geometry.boundingBox.min.y );
+
+	}
+
+	/**
+	 * Height of the model's highest point above its own origin, before scaling.
+	 *
+	 * Placement pins the *summit*, so this — not the overall height — is what it needs. The two
+	 * only agree when the mesh stands exactly on its origin: the generated cone does, an
+	 * imported one rarely does (mount.glb's base sits at y = -0.18).
+	 */
+	modelTop() {
+
+		if ( ! this.mesh ) return 0;
+
+		const geometry = this.mesh.geometry;
+		if ( ! geometry.boundingBox ) geometry.computeBoundingBox();
+
+		return Math.max( 1e-6, geometry.boundingBox.max.y );
 
 	}
 

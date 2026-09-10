@@ -54,17 +54,50 @@ export function pickFile( accept ) {
  * parented, sometimes with modifiers left as separate primitives. Everything is flattened
  * and reduced to position + normal, which is all any of these shaders read.
  */
-export async function parseGLB( arrayBuffer ) {
+/**
+ * One GLTFLoader for every import, with Draco attached.
+ *
+ * Blender's glTF exporter offers Draco compression, and a file exported with it lists
+ * KHR_draco_mesh_compression as *required*: without a decoder the loader refuses it outright,
+ * which is what every compressed hand-off hit. The decoder is vendored under vendor/draco/,
+ * runs in workers, and is only fetched the first time a compressed file arrives.
+ */
+let dracoLoader = null;
 
-	const { GLTFLoader } = await import( '../vendor/GLTFLoader.js' );
+async function loadGLTF( arrayBuffer ) {
 
-	const gltf = await new Promise( ( resolve, reject ) => {
+	const [ { GLTFLoader }, { DRACOLoader } ] = await Promise.all( [
+		import( '../vendor/GLTFLoader.js' ),
+		import( '../vendor/DRACOLoader.js' )
+	] );
 
-		new GLTFLoader().parse( arrayBuffer, '', resolve, reject );
+	if ( ! dracoLoader ) {
 
-	} );
+		dracoLoader = new DRACOLoader();
+		dracoLoader.setDecoderPath( new URL( '../vendor/draco/', import.meta.url ).href );
 
+	}
+
+	const loader = new GLTFLoader();
+	loader.setDRACOLoader( dracoLoader );
+
+	return new Promise( ( resolve, reject ) => loader.parse( arrayBuffer, '', resolve, reject ) );
+
+}
+
+/**
+ * Every mesh in the file, baked into world space and reduced to the attributes asked for.
+ *
+ * `keepUV` exists because this used to keep only position and normal. That is right for the
+ * hill and the grass, which are painted in code, and it is exactly why a textured mountain or
+ * cabin could never import: its UVs were thrown away here, and the prop importers then
+ * refused the file for having none.
+ */
+async function collectGeometry( gltf, { keepUV = false } = {} ) {
+
+	const keep = keepUV ? [ 'position', 'normal', 'uv' ] : [ 'position', 'normal' ];
 	const geometries = [];
+
 	gltf.scene.updateMatrixWorld( true );
 
 	gltf.scene.traverse( object => {
@@ -76,7 +109,7 @@ export async function parseGLB( arrayBuffer ) {
 
 		for ( const name in geometry.attributes ) {
 
-			if ( name !== 'position' && name !== 'normal' ) geometry.deleteAttribute( name );
+			if ( keep.indexOf( name ) < 0 ) geometry.deleteAttribute( name );
 
 		}
 
@@ -96,6 +129,15 @@ export async function parseGLB( arrayBuffer ) {
 	} );
 
 	if ( geometries.length === 0 ) throw new Error( 'no meshes in that file' );
+
+	// Merging needs every part to carry the same attributes. If only some parts are unwrapped,
+	// dropping UVs everywhere is the honest outcome — the importer then says so.
+	if ( keepUV && ! geometries.every( g => g.attributes.uv ) ) {
+
+		geometries.forEach( g => g.attributes.uv && g.deleteAttribute( 'uv' ) );
+
+	}
+
 	if ( geometries.length === 1 ) return geometries[ 0 ];
 
 	const { mergeBufferGeometries } = await import( '../vendor/BufferGeometryUtils.js' );
@@ -103,6 +145,57 @@ export async function parseGLB( arrayBuffer ) {
 
 	if ( ! merged ) throw new Error( 'meshes could not be merged — try joining them in Blender' );
 	return merged;
+
+}
+
+/** Geometry only — for the hill, the blade and the tuft, which are painted in code. */
+export async function parseGLB( arrayBuffer ) {
+
+	return collectGeometry( await loadGLTF( arrayBuffer ) );
+
+}
+
+/**
+ * Geometry with its UVs, plus the artist's own base-colour texture when the file carries one —
+ * for the props that bring their own paint: the mountain and the cabin.
+ */
+export async function parseGLBWithMap( arrayBuffer ) {
+
+	const gltf = await loadGLTF( arrayBuffer );
+	const geometry = await collectGeometry( gltf, { keepUV: true } );
+
+	// Base colour if there is one, otherwise the emissive slot. Exporters that bake lighting
+	// into the texture ship it as an *emissive* map over a black base colour — mount.glb and
+	// cabin.glb both do, their image is literally named "shaded" — so a model that displays
+	// perfectly in Blender used to arrive here with nothing in `map` at all.
+	let map = null;
+	let baked = false;
+
+	gltf.scene.traverse( object => {
+
+		if ( map || ! object.isMesh ) return;
+		const material = Array.isArray( object.material ) ? object.material[ 0 ] : object.material;
+		if ( ! material ) return;
+
+		if ( material.map ) {
+
+			map = material.map;
+
+		} else if ( material.emissiveMap ) {
+
+			map = material.emissiveMap;
+			baked = true;
+
+		}
+
+	} );
+
+	const index = geometry.getIndex();
+	const triangles = index ? index.count / 3 : geometry.attributes.position.count / 3;
+
+	// `baked` means the lighting is already painted in, so the prop should be drawn unlit —
+	// lighting it again from the sky would shade every shadow twice.
+	return { geometry, map, baked, triangles };
 
 }
 

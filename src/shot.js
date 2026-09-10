@@ -182,35 +182,18 @@ export const MOUNTAIN = {
 	// margin on every screen. The base goes wherever it must — the meadow covers it.
 	summitY: 2.5,
 
-	// shape — a stratovolcano, not a party hat: `profile` above 1 steepens the flanks
-	// toward the summit and flares the base.
-	radius: 5.2,
-	height: 4.3,
-	profile: 1.2,
-	ridgeAmount: 0.16,
+	// Tuned for the artist's model, assets/models/mountain_custom.glb, which loads at startup.
+	// Its texture has the lighting baked in, so it is drawn unlit at an ordinary exposure
+	// (measured: 1 puts the snow at [227,241,250] against the reference's [222,231,240]), and
+	// fitted to the blockout's height.
+	modelScale: 0.98,
+	screenX: 0,
+	exposure: 1,
+	unlit: 1,
 
-	// look
-	// Where the unbroken cap ends; below it the snow runs down the gullies as tongues.
-	// The meadow's ridge cuts the cone at about v = 0.60, so the cap has to sit well above
-	// that or there is no rock left to see.
-	snowLine: 0.72,
-	tongueLength: 0.42,
-	tongueCount: 15,
-	// 0 = the reference's cool grey-blue rock, 1 = warm brown.
-	rockWarmth: 1,
-	// The beauty pass is near-black and the grade lifts it, so exposure here is not 1-ish.
-	// Measured on screen after grading: rock lands at [109,102,92], hue 35, sat 0.16 — dark
-	// brown seen through mist, which is how the reference gets its look. (The photo itself
-	// measures hue 202: that is the mist, not the rock.)
-	exposure: 1.6,
-	// Flat distance haze, kept modest so the rock keeps its colour...
+	// Flat distance haze, plus a separate bank of mist around the foot: the base dissolves
+	// while the upper flanks keep their colour. Flat haze alone can only wash the cone evenly.
 	haze: 0.14,
-	lightWrap: 0.45,
-	lightTint: 0.2,
-
-	// ...and a separate bank of mist around the foot, which is how the reference gets away
-	// with genuinely dark rock while still reading as far off: the base dissolves, the upper
-	// flanks stay saturated. Flat haze alone can only wash the whole cone evenly.
 	baseMist: 0.4,
 	baseMistHeight: 0.45,
 
@@ -225,6 +208,33 @@ export const MOUNTAIN = {
 	// The reference frames the cone's centre 23% across a 2:1 image, i.e. NDC -0.54.
 	wide: { aspect: 1.9, anchorX: - 0.54, width: 1, height: 1 },
 	narrow: { aspect: 0.5, anchorX: - 0.34, width: 0.46, height: 0.94 }
+};
+
+/**
+ * The generated cone. Used only if assets/models/mountain_custom.glb goes missing, and as the
+ * height an imported mountain is fitted to. No sliders: there is one mountain, from the artist.
+ *
+ * exposure and unlit are the look it needs in place of the artist's: its map is painted
+ * near-black for the grade to lift, and it is lit by the sky rather than baked.
+ */
+export const MOUNTAIN_BLOCKOUT = {
+	// a stratovolcano, not a party hat: `profile` above 1 steepens the flanks toward the
+	// summit and flares the base
+	radius: 5.2,
+	height: 4.3,
+	profile: 1.2,
+	ridgeAmount: 0.16,
+
+	// the unbroken cap, and the snow tongues that run down the gullies below it
+	snowLine: 0.72,
+	tongueLength: 0.42,
+	tongueCount: 15,
+	rockWarmth: 1,
+
+	lightWrap: 0.45,
+	lightTint: 0.2,
+	exposure: 1.6,
+	unlit: 0
 };
 
 /**
@@ -249,39 +259,56 @@ export const CABIN = {
 	yaw: - 0.32,
 	sink: 0.02,
 
+	// Tuned for the artist's model, assets/models/cabin_custom.glb, which loads at startup:
+	// baked lighting, so unlit at a lower exposure (0.5 puts the wall at [119,68,70] against
+	// the reference [118,41,48]); fitted to the blockout's height; nudged left until its door
+	// frame sits where the reference has it, 81.7% across.
+	modelScale: 0.83,
+	screenX: - 0.21,
+	exposure: 0.5,
+	unlit: 1,
+
+	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
+	// +0.49, and lets the rest run off the edge.
+	wide: { aspect: 1.9, anchorX: 1.05, scale: 1 },
+	narrow: { aspect: 0.5, anchorX: 0.78, scale: 0.82 }
+};
+
+/**
+ * The generated cabin. Used only if assets/models/cabin_custom.glb goes missing, and as the
+ * height an imported cabin is fitted to. No sliders: there is one cabin, from the artist.
+ *
+ * Its door plane is kept on the artist's model too, invisible, as the click target.
+ */
+export const CABIN_BLOCKOUT = {
 	width: 1.1,
 	height: 1.35,
 	depth: 1,
 	eaveOverhang: 0.07,
 	eaveHeight: 0.075,
 
-	doorWidth: 0.33,
-	doorHeight: 0.78,
 	// The door is not centred on the wall: the reference puts it about 12% of the frame in
 	// from the cabin's near corner, with the rest of the building running off the edge.
+	doorWidth: 0.33,
+	doorHeight: 0.78,
 	doorOffsetX: - 0.26,
 
-	// Radius of the petal ring as a fraction of the door's width; the tips reach 1.42x it.
-	// The reference's sun is about 39% of the door wide, hence 0.14 rather than 0.2.
+	// Radius of the sun's petal ring as a fraction of the door's width; the tips reach 1.42x.
 	ornamentSize: 0.14,
 	ornamentRays: 8,
 	ornamentSwirl: 0.55,
 	lampSize: 0.2,
 
-	// look
 	weathering: 0.35,
 	grain: 0.22,
-	exposure: 1.6,
 	lightWrap: 0.35,
 	lightTint: 0.3,
-	// How much darker the side wall reads than the face-on one. This is the corner.
+	// how much darker the side wall reads than the face-on one — this is the corner
 	faceTint: 0.32,
 	eaveColor: [ 0.130, 0.235, 0.300 ],
 
-	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
-	// +0.49, and lets the rest run off the edge.
-	wide: { aspect: 1.9, anchorX: 1.05, scale: 1 },
-	narrow: { aspect: 0.5, anchorX: 0.78, scale: 0.82 }
+	exposure: 1.6,
+	unlit: 0
 };
 
 /**
