@@ -38,8 +38,8 @@ export const SHOT = {
 	// fov is vertical in three, so this vertical framing holds at any window aspect; a wider
 	// window simply reveals more to either side.
 	camera: {
-		position: [ - 0.430, - 0.050, 3.097 ],
-		rotation: [ 0.015, 0, 0 ],
+		position: [ 0.795, 0.208, 6.103 ],
+		rotation: [ 0.005, - 0.005, 0 ],
 		cameraDistance: 3
 	},
 
@@ -135,16 +135,16 @@ export const GRASS = {
  * feeling less like it floats.
  */
 export const FOG = {
-	boxSize: 3.6,
+	boxSize: 6,
 	radius: 1.0,
-	start: 1.9,
+	start: 1.95,
 	range: 0.7,
 
 	// The box is offset from the terrain (which centres on z = -2), and that is what makes
 	// the horizon dissolve: the ground reaches z = -7 while the box fades out from 5.5, so
 	// the far rim melts into sky and the foreground stays clear. Centring it on the terrain
 	// zeroes the term everywhere.
-	centre: [ 0, 0 ],
+	centre: [ - 0.1, - 1 ],
 
 	// Aerial perspective, added because the stage SDF above is position-based: two hills at
 	// different depths but similar distance from the box centre took identical fog and
@@ -153,9 +153,9 @@ export const FOG = {
 	// 0.35 measured against this shot: it triples the colour distance between the two hills
 	// (26 -> 80 summed RGB) while the foreground and the near hill stay pixel-identical.
 	// 0.45 separates harder but washes the far grass out; 0.25 barely reads.
-	hazeStart: 4.5,
+	hazeStart: 5.9,
 	hazeRange: 6.5,
-	hazeAmount: 0.35
+	hazeAmount: 0.32
 };
 
 /**
@@ -174,28 +174,26 @@ export const FOG = {
  * camera and writes depth, so anything past it is occluded by the sky itself.
  */
 export const MOUNTAIN = {
-	distance: 12,
+	distance: 11.8,
 
 	// The *summit* height, not the base. Shrinking the cone for a narrow viewport used to
 	// drop its peak below the meadow's ridge and hide it completely; pinning the summit
 	// means scale only narrows the silhouette, and the peak clears the grass by the same
 	// margin on every screen. The base goes wherever it must — the meadow covers it.
-	summitY: 2.5,
+	summitY: 2.8,
 
-	// Tuned for the artist's model, assets/models/mountain_custom.glb, which loads at startup.
-	// Its texture has the lighting baked in, so it is drawn unlit at an ordinary exposure
-	// (measured: 1 puts the snow at [227,241,250] against the reference's [222,231,240]), and
-	// fitted to the blockout's height.
-	modelScale: 0.98,
-	screenX: 0,
-	exposure: 1,
+	// Tuned in the browser for the artist's model, assets/models/mountain_custom.glb, which
+	// loads at startup. Its texture has the lighting baked in, so it is drawn unlit.
+	modelScale: 0.58,
+	screenX: - 0.03,
+	exposure: 0.75,
 	unlit: 1,
 
 	// Flat distance haze, plus a separate bank of mist around the foot: the base dissolves
 	// while the upper flanks keep their colour. Flat haze alone can only wash the cone evenly.
-	haze: 0.14,
-	baseMist: 0.4,
-	baseMistHeight: 0.45,
+	haze: 0,
+	baseMist: 0.16,
+	baseMistHeight: 0.46,
 
 	// Framing per viewport shape. anchorX is NDC; width/height scale the cone.
 	//
@@ -255,17 +253,16 @@ export const CABIN = {
 	// buries it — occlusion does not care how well the proportions match. So it stands close
 	// and is built small to suit: on screen that is indistinguishable from a large cabin
 	// further off, and it is the only version the camera can actually see.
-	distance: 3,
-	yaw: - 0.32,
-	sink: 0.02,
+	distance: 6.484,
+	yaw: - 1.02,
+	sink: 0.15,
 
-	// Tuned for the artist's model, assets/models/cabin_custom.glb, which loads at startup:
-	// baked lighting, so unlit at a lower exposure (0.5 puts the wall at [119,68,70] against
-	// the reference [118,41,48]); fitted to the blockout's height; nudged left until its door
-	// frame sits where the reference has it, 81.7% across.
-	modelScale: 0.83,
-	screenX: - 0.21,
-	exposure: 0.5,
+	// Tuned in the browser for the artist's model, assets/models/cabin_custom.glb, which loads
+	// at startup: baked lighting, so unlit. The model carries two objects — the cabin and the
+	// logo on its gable — each with its own texture; the importer packs them into one atlas.
+	modelScale: 1.62,
+	screenX: - 0.17,
+	exposure: 0.75,
 	unlit: 1,
 
 	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC

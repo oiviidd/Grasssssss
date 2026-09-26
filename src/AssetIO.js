@@ -93,10 +93,10 @@ async function loadGLTF( arrayBuffer ) {
  * cabin could never import: its UVs were thrown away here, and the prop importers then
  * refused the file for having none.
  */
-async function collectGeometry( gltf, { keepUV = false } = {} ) {
+function collectParts( gltf, { keepUV = false } = {} ) {
 
 	const keep = keepUV ? [ 'position', 'normal', 'uv' ] : [ 'position', 'normal' ];
-	const geometries = [];
+	const parts = [];
 
 	gltf.scene.updateMatrixWorld( true );
 
@@ -115,36 +115,116 @@ async function collectGeometry( gltf, { keepUV = false } = {} ) {
 
 		if ( ! geometry.attributes.normal ) geometry.computeVertexNormals();
 
-		if ( ! geometry.getIndex() ) {
-
-			const count = geometry.attributes.position.count;
-			const indices = new Uint32Array( count );
-			for ( let i = 0; i < count; i ++ ) indices[ i ] = i;
-			geometry.setIndex( new THREE.BufferAttribute( indices, 1 ) );
-
-		}
-
-		geometries.push( geometry );
+		const material = Array.isArray( object.material ) ? object.material[ 0 ] : object.material;
+		parts.push( { geometry: toPlainArrays( geometry ), material } );
 
 	} );
 
-	if ( geometries.length === 0 ) throw new Error( 'no meshes in that file' );
+	if ( parts.length === 0 ) throw new Error( 'no meshes in that file' );
 
 	// Merging needs every part to carry the same attributes. If only some parts are unwrapped,
 	// dropping UVs everywhere is the honest outcome — the importer then says so.
-	if ( keepUV && ! geometries.every( g => g.attributes.uv ) ) {
+	if ( keepUV && ! parts.every( p => p.geometry.attributes.uv ) ) {
 
-		geometries.forEach( g => g.attributes.uv && g.deleteAttribute( 'uv' ) );
+		parts.forEach( p => p.geometry.attributes.uv && p.geometry.deleteAttribute( 'uv' ) );
 
 	}
 
+	return parts;
+
+}
+
+/**
+ * Float32 attributes and a Uint32 index on every part.
+ *
+ * mergeBufferGeometries refuses parts whose attributes differ in array type or `normalized`,
+ * and a glTF can legitimately store one object's UVs as quantised shorts and another's as
+ * floats. De-quantising on the way in means two objects from the same file always merge.
+ */
+function toPlainArrays( geometry ) {
+
+	for ( const name in geometry.attributes ) {
+
+		const attribute = geometry.attributes[ name ];
+		if ( attribute.array instanceof Float32Array && ! attribute.normalized && ! attribute.isInterleavedBufferAttribute ) continue;
+
+		const { count, itemSize } = attribute;
+		const array = new Float32Array( count * itemSize );
+		const getters = [ 'getX', 'getY', 'getZ', 'getW' ];
+
+		// r122's getters return the raw stored integer, so normalised data is scaled here.
+		const source = attribute.isInterleavedBufferAttribute ? attribute.data.array : attribute.array;
+		const divisor = attribute.normalized ? normalisedMax( source ) : 1;
+
+		for ( let i = 0; i < count; i ++ ) {
+
+			for ( let k = 0; k < itemSize; k ++ ) {
+
+				const value = attribute[ getters[ k ] ]( i ) / divisor;
+				array[ i * itemSize + k ] = attribute.normalized ? Math.max( - 1, value ) : value;
+
+			}
+
+		}
+
+		geometry.setAttribute( name, new THREE.BufferAttribute( array, itemSize ) );
+
+	}
+
+	const index = geometry.getIndex();
+
+	if ( ! index ) {
+
+		const count = geometry.attributes.position.count;
+		const indices = new Uint32Array( count );
+		for ( let i = 0; i < count; i ++ ) indices[ i ] = i;
+		geometry.setIndex( new THREE.BufferAttribute( indices, 1 ) );
+
+	} else if ( ! ( index.array instanceof Uint32Array ) ) {
+
+		geometry.setIndex( new THREE.BufferAttribute( Uint32Array.from( index.array ), 1 ) );
+
+	}
+
+	return geometry;
+
+}
+
+function normalisedMax( array ) {
+
+	if ( array instanceof Int8Array ) return 127;
+	if ( array instanceof Uint8Array || array instanceof Uint8ClampedArray ) return 255;
+	if ( array instanceof Int16Array ) return 32767;
+	if ( array instanceof Uint16Array ) return 65535;
+	if ( array instanceof Int32Array ) return 2147483647;
+	if ( array instanceof Uint32Array ) return 4294967295;
+	return 1;
+
+}
+
+/**
+ * Several objects into one geometry.
+ *
+ * three r122 ships BufferGeometryUtils as a single namespace object, not as named exports —
+ * destructuring `mergeBufferGeometries` straight off the module yielded undefined, so every
+ * file with more than one object (a cabin with its logo as a separate mesh, say) failed to
+ * import while single-object files worked.
+ */
+export async function mergeGeometries( geometries ) {
+
 	if ( geometries.length === 1 ) return geometries[ 0 ];
 
-	const { mergeBufferGeometries } = await import( '../vendor/BufferGeometryUtils.js' );
-	const merged = mergeBufferGeometries( geometries );
+	const { BufferGeometryUtils } = await import( '../vendor/BufferGeometryUtils.js' );
+	const merged = BufferGeometryUtils.mergeBufferGeometries( geometries );
 
 	if ( ! merged ) throw new Error( 'meshes could not be merged — try joining them in Blender' );
 	return merged;
+
+}
+
+async function collectGeometry( gltf, options ) {
+
+	return mergeGeometries( collectParts( gltf, options ).map( p => p.geometry ) );
 
 }
 
@@ -156,39 +236,207 @@ export async function parseGLB( arrayBuffer ) {
 }
 
 /**
+ * The texture a part is painted with: base colour if there is one, otherwise the emissive slot.
+ *
+ * Exporters that bake lighting into the texture ship it as an *emissive* map over a black base
+ * colour — the artist's mountain and cabin both do, their image is literally named "shaded" —
+ * so a model that displays perfectly in Blender used to arrive here with nothing in `map`.
+ */
+function paintOf( material ) {
+
+	if ( ! material ) return { map: null, baked: false, color: [ 0.5, 0.5, 0.5 ] };
+	if ( material.map ) return { map: material.map, baked: false };
+	if ( material.emissiveMap ) return { map: material.emissiveMap, baked: true };
+
+	// Untextured: whichever colour the part actually shows — emissive when that is what lights it.
+	const emissive = material.emissive && ( material.emissive.r + material.emissive.g + material.emissive.b ) > 0;
+	const c = emissive ? material.emissive : ( material.color || new THREE.Color( 0.5, 0.5, 0.5 ) );
+	return { map: null, baked: emissive, color: [ c.r, c.g, c.b ] };
+
+}
+
+const ATLAS_PADDING = 8;
+
+/**
+ * Packs each part's texture into one atlas and moves its UVs into its tile.
+ *
+ * The mountain and cabin shaders take a single map. A file with two objects painted from two
+ * images — the cabin and the logo on its gable — used to be drawn entirely from the first
+ * image, so the second object sampled someone else's paint. Packing keeps one material and one
+ * draw call. A part with no texture gets a small tile of its flat colour.
+ */
+function buildAtlas( parts, paints ) {
+
+	const limit = Math.min( 8192, maxTextureSize() );
+
+	const tiles = paints.map( paint => {
+
+		const image = paint.map && paint.map.image;
+		return image ? { image, width: image.width, height: image.height } : { color: paint.color, width: 8, height: 8 };
+
+	} );
+
+	// Same image used twice (two objects sharing one material) packs once.
+	const unique = [];
+	tiles.forEach( tile => {
+
+		const twin = tile.image && unique.find( u => u.image === tile.image );
+		tile.slot = twin || tile;
+		if ( ! twin ) unique.push( tile );
+
+	} );
+
+	// Shelf packing, tallest first: plenty for the handful of images a prop carries.
+	const order = unique.slice().sort( ( a, b ) => b.height - a.height );
+	let scale = 1;
+	let layout;
+
+	for ( let attempt = 0; attempt < 8; attempt ++ ) {
+
+		layout = shelfPack( order, scale, limit );
+		if ( layout ) break;
+		scale *= 0.5;
+
+	}
+
+	if ( ! layout ) throw new Error( 'textures are too large to combine' );
+
+	const canvas = document.createElement( 'canvas' );
+	canvas.width = layout.width;
+	canvas.height = layout.height;
+	const context = canvas.getContext( '2d' );
+
+	unique.forEach( tile => {
+
+		const { x, y, w, h } = tile.rect;
+
+		if ( tile.image ) {
+
+			// Stretched into the gutter first, so mip levels bleed the tile's own edge colour
+			// rather than the neighbour's.
+			context.drawImage( tile.image, x - ATLAS_PADDING, y - ATLAS_PADDING, w + ATLAS_PADDING * 2, h + ATLAS_PADDING * 2 );
+			context.drawImage( tile.image, x, y, w, h );
+
+		} else {
+
+			const [ r, g, b ] = tile.color.map( c => Math.round( Math.min( 1, Math.max( 0, c ) ) * 255 ) );
+			context.fillStyle = `rgb(${ r },${ g },${ b })`;
+			context.fillRect( x - ATLAS_PADDING, y - ATLAS_PADDING, w + ATLAS_PADDING * 2, h + ATLAS_PADDING * 2 );
+
+		}
+
+	} );
+
+	// glTF textures are not flipped (v = 0 is the image's top row); the atlas follows suit, so
+	// a tile's v runs down from its top edge.
+	parts.forEach( ( part, i ) => {
+
+		const tile = tiles[ i ].slot;
+		const { x, y, w, h } = tile.rect;
+		const uv = part.geometry.attributes.uv;
+		const array = uv.array;
+
+		for ( let k = 0; k < array.length; k += 2 ) {
+
+			const u = tile.image ? Math.min( 1, Math.max( 0, array[ k ] ) ) : 0.5;
+			const v = tile.image ? Math.min( 1, Math.max( 0, array[ k + 1 ] ) ) : 0.5;
+			array[ k ] = ( x + u * w ) / layout.width;
+			array[ k + 1 ] = ( y + v * h ) / layout.height;
+
+		}
+
+		uv.needsUpdate = true;
+
+	} );
+
+	const source = paints.find( p => p.map );
+	const texture = new THREE.CanvasTexture( canvas );
+	texture.flipY = false;
+	texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+	texture.minFilter = THREE.LinearMipMapLinearFilter;
+	texture.magFilter = THREE.LinearFilter;
+	if ( source ) texture.encoding = source.map.encoding;
+
+	return texture;
+
+}
+
+function shelfPack( tiles, scale, limit ) {
+
+	const pad = ATLAS_PADDING;
+	const rowWidth = Math.min( limit, Math.max( ...tiles.map( t => Math.ceil( t.width * scale ) + pad * 2 ) ) * Math.ceil( Math.sqrt( tiles.length ) ) );
+	let x = 0, y = 0, row = 0, width = 0;
+
+	for ( const tile of tiles ) {
+
+		const w = Math.max( 1, Math.round( tile.width * scale ) );
+		const h = Math.max( 1, Math.round( tile.height * scale ) );
+
+		if ( x + w + pad * 2 > rowWidth && x > 0 ) {
+
+			y += row;
+			x = 0;
+			row = 0;
+
+		}
+
+		tile.rect = { x: x + pad, y: y + pad, w, h };
+		x += w + pad * 2;
+		row = Math.max( row, h + pad * 2 );
+		width = Math.max( width, x );
+
+	}
+
+	const height = y + row;
+	return width <= limit && height <= limit ? { width, height } : null;
+
+}
+
+let cachedMaxTextureSize = 0;
+
+function maxTextureSize() {
+
+	if ( cachedMaxTextureSize ) return cachedMaxTextureSize;
+
+	try {
+
+		const gl = document.createElement( 'canvas' ).getContext( 'webgl' );
+		cachedMaxTextureSize = gl ? gl.getParameter( gl.MAX_TEXTURE_SIZE ) : 4096;
+		const lose = gl && gl.getExtension( 'WEBGL_lose_context' );
+		if ( lose ) lose.loseContext();
+
+	} catch ( error ) {
+
+		cachedMaxTextureSize = 4096;
+
+	}
+
+	return cachedMaxTextureSize;
+
+}
+
+/**
  * Geometry with its UVs, plus the artist's own base-colour texture when the file carries one —
  * for the props that bring their own paint: the mountain and the cabin.
  */
 export async function parseGLBWithMap( arrayBuffer ) {
 
 	const gltf = await loadGLTF( arrayBuffer );
-	const geometry = await collectGeometry( gltf, { keepUV: true } );
+	const parts = collectParts( gltf, { keepUV: true } );
+	const paints = parts.map( part => paintOf( part.material ) );
 
-	// Base colour if there is one, otherwise the emissive slot. Exporters that bake lighting
-	// into the texture ship it as an *emissive* map over a black base colour — mount.glb and
-	// cabin.glb both do, their image is literally named "shaded" — so a model that displays
-	// perfectly in Blender used to arrive here with nothing in `map` at all.
+	const images = new Set( paints.filter( p => p.map ).map( p => p.map.image ) );
+	const needsAtlas = parts[ 0 ].geometry.attributes.uv && images.size > 0 &&
+		( images.size > 1 || paints.some( p => ! p.map ) );
+
 	let map = null;
-	let baked = false;
+	if ( needsAtlas ) map = buildAtlas( parts, paints );
+	else if ( images.size === 1 ) map = paints.find( p => p.map ).map;
 
-	gltf.scene.traverse( object => {
-
-		if ( map || ! object.isMesh ) return;
-		const material = Array.isArray( object.material ) ? object.material[ 0 ] : object.material;
-		if ( ! material ) return;
-
-		if ( material.map ) {
-
-			map = material.map;
-
-		} else if ( material.emissiveMap ) {
-
-			map = material.emissiveMap;
-			baked = true;
-
-		}
-
-	} );
+	// `baked` means the lighting is already painted in; one baked part is enough to call the
+	// whole prop baked, since a single material cannot light half of it.
+	const baked = paints.some( p => p.baked );
+	const geometry = await mergeGeometries( parts.map( p => p.geometry ) );
 
 	const index = geometry.getIndex();
 	const triangles = index ? index.count / 3 : geometry.attributes.position.count / 3;

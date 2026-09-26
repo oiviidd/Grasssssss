@@ -181,7 +181,8 @@ export async function loadCustomTerrain( url ) {
 	if ( geometries.length === 0 ) return null;
 	if ( geometries.length === 1 ) return geometries[ 0 ];
 
-	const { mergeBufferGeometries } = await import( '../vendor/BufferGeometryUtils.js' );
-	return mergeBufferGeometries( geometries );
+	// r122 exports BufferGeometryUtils as one namespace object, not named functions.
+	const { BufferGeometryUtils } = await import( '../vendor/BufferGeometryUtils.js' );
+	return BufferGeometryUtils.mergeBufferGeometries( geometries );
 
 }
