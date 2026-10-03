@@ -14,9 +14,16 @@
  * that tells you it is a building and not a flat.
  */
 export const cabinVert = /* glsl */`
+// 1 on the small objects laid over the building — the emblem on the door — 0 on the
+// building itself. Absent on the generated cabin, where it reads 0.
+attribute float detail;
+
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec2 v_uv;
+varying vec3 v_local;
+varying vec3 v_localNormal;
+varying float v_detail;
 
 void main () {
 	vec4 worldPosition = modelMatrix * vec4(position, 1.0);
@@ -24,6 +31,9 @@ void main () {
 	v_worldPosition = worldPosition.xyz;
 	v_worldNormal = normalize(mat3(modelMatrix) * normal);
 	v_uv = uv;
+	v_local = position;
+	v_localNormal = normal;
+	v_detail = detail;
 
 	gl_Position = projectionMatrix * viewMatrix * worldPosition;
 }
@@ -46,11 +56,52 @@ uniform float u_alphaTest;
 // level sharper brings the carving and the grain back without visible shimmer.
 uniform float u_lodBias;
 
+// The emblem on the door is a real relief, but barely a centimetre proud and baked in the
+// door's own paint, so drawn unlit it melts into the wood. Two touches lift it without
+// changing its colour: its edges catch or lose a light from the upper left (u_detailRelief),
+// and it drops a small soft shadow down and to the right onto the door (u_detailShadow).
+// u_detailMask is its silhouette, blurred, baked once at import over u_detailRect (model xy:
+// min, size); u_detailDepth.x is the z of the surface it sits on. Both strengths default to
+// 0, which leaves every other piece of the cabin untouched.
+uniform float u_detailRelief;
+uniform float u_detailShadow;
+uniform sampler2D u_detailMask;
+uniform vec4 u_detailRect;
+uniform vec2 u_detailDepth;
+uniform vec2 u_detailOffset;
+
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec2 v_uv;
+varying vec3 v_local;
+varying vec3 v_localNormal;
+varying float v_detail;
 
 #include <lusionFog>
+
+float detailMask(vec2 offset) {
+	vec2 uv = (v_local.xy - offset - u_detailRect.xy) / u_detailRect.zw;
+	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+	return texture2D(u_detailMask, uv).r;
+}
+
+float detailShade() {
+	vec3 n = normalize(v_localNormal);
+
+	if (v_detail > 0.5) {
+		// Side walls by which way they face; the face itself only a touch brighter.
+		float side = 1.0 - abs(n.z);
+		vec2 light = normalize(vec2(- 0.55, 0.85));
+		return 1.0 + u_detailRelief * (side * dot(n.xy, light) * 0.55 + (1.0 - side) * 0.05);
+	}
+
+	if (u_detailShadow <= 0.0 || n.z < 0.5) return 1.0;
+
+	// Only on the plane it sits on, not on anything further out in the same rectangle.
+	float onPlane = 1.0 - smoothstep(0.006, 0.02, abs(v_local.z - u_detailDepth.x));
+	float shadow = max(detailMask(u_detailOffset), detailMask(vec2(0.0)) * 0.45);
+	return 1.0 - u_detailShadow * shadow * onPlane;
+}
 
 void main () {
 	vec4 texel = texture2D(u_map, v_uv, u_lodBias);
@@ -69,7 +120,7 @@ void main () {
 	float shade = mix(1.0 - u_faceTint, 1.0, facing);
 	shade = mix(shade, 1.0, u_unlit);
 
-	vec3 color = texel.rgb * light * u_exposure * shade;
+	vec3 color = texel.rgb * light * u_exposure * shade * detailShade();
 
 	gl_FragColor = vec4(applyFog(color, v_worldPosition), 1.0);
 }

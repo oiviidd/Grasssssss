@@ -9,6 +9,10 @@
  *
  * That wobble was all the original did, and it only ever moves a sprite about a tenth of
  * a unit: every insect hung in one spot buzzing in place rather than crossing the meadow.
+ *
+ * At dusk (the day / night test, see setPresent) each one breaks off, a beat apart from
+ * the others, and flies out past the nearer edge of the frame; at dawn it flies back in
+ * from that side to its own patch of meadow and takes up roaming again.
  */
 import * as THREE from '../vendor/three.module.js';
 import { PRECISION_PREFIX } from './FboHelper.js';
@@ -42,6 +46,9 @@ export class Insects {
 		this.container = new THREE.Object3D();
 		this.uniforms = uniforms;
 		this.insects = [];
+
+		// Out over the meadow, or gone for the night.
+		this.present = true;
 
 	}
 
@@ -165,6 +172,12 @@ export class Insects {
 				// starts mid-pause, staggered, so they do not all set off on the same frame
 				wait: random() * 1.5,
 				leg: 0,
+				// roam → leaving → gone → returning → roam; `pending` is a change of state
+				// waiting out its `delay`, so the group does not move as one
+				state: 'roam',
+				pending: null,
+				delay: 0,
+				exit: new THREE.Vector3(),
 				frames: atlas.data.frames,
 				textureWidth: atlas.data.meta.size.w,
 				textureHeight: atlas.data.meta.size.h,
@@ -339,11 +352,147 @@ export class Insects {
 
 	}
 
-	_fly( insect, dt ) {
+	/**
+	 * Sends the insects off (false) or brings them back (true). Each goes on its own short
+	 * delay; one still on its way out simply turns round.
+	 */
+	setPresent( present ) {
+
+		if ( present === this.present ) return;
+		this.present = present;
+
+		for ( const insect of this.insects ) {
+
+			insect.pending = present ? 'return' : 'leave';
+			insect.delay = this.random() * ( present ? 2.5 : 1.6 );
+
+		}
+
+	}
+
+	/**
+	 * A point just past the side of the frame nearer to (x, z), at the same depth, that a
+	 * straight flight from there reaches without crossing the cabin. Over the top when
+	 * both sides are blocked.
+	 */
+	_exitFor( x, z, height, camera ) {
+
+		_forward.set( 0, 0, - 1 ).applyQuaternion( camera.quaternion );
+		_forward.y = 0;
+		if ( _forward.lengthSq() < 1e-6 ) _forward.set( 0, 0, - 1 );
+		_forward.normalize();
+		_right.set( - _forward.z, 0, _forward.x );
+
+		const dx = x - camera.position.x;
+		const dz = z - camera.position.z;
+		const depth = Math.max( 1, dx * _forward.x + dz * _forward.z );
+		const across = dx * _right.x + dz * _right.z;
+
+		const halfHeight = THREE.MathUtils.degToRad( camera.fov ) * 0.5;
+		const edge = Math.tan( halfHeight ) * camera.aspect * depth;
+
+		const nearer = across >= 0 ? 1 : - 1;
+
+		for ( const side of [ nearer, - nearer ] ) {
+
+			// well clear of the edge, so the sprite is fully out before it stops
+			const out = side * ( edge + 1.2 );
+			const ex = camera.position.x + _forward.x * ( depth + 0.8 ) + _right.x * out;
+			const ez = camera.position.z + _forward.z * ( depth + 0.8 ) + _right.z * out;
+
+			if ( ! this._pathBlocked( x, z, ex, ez ) ) return _exit.set( ex, height + 0.6, ez );
+
+		}
+
+		return _exit.set( x, height + Math.tan( halfHeight ) * depth * 1.6 + 1, z );
+
+	}
+
+	_startLeaving( insect, camera ) {
+
+		const { position } = insect;
+		insect.exit.copy( this._exitFor( position.x, position.z, position.y, camera ) );
+		insect.target.copy( insect.exit );
+		insect.state = 'leaving';
+		insect.wait = 0;
+		insect.leg = 0;
+
+	}
+
+	_startReturning( insect, camera ) {
+
+		const { home, flight, position } = insect;
+		const height = flight.height[ 0 ] + this.random() * ( flight.height[ 1 ] - flight.height[ 0 ] );
+
+		// Still in view, heading out: turn round where it is. Otherwise come in from the side
+		// nearer its patch of meadow.
+		if ( insect.state === 'gone' ) {
+
+			position.copy( this._exitFor( home.x, home.y, height, camera ) );
+			insect.velocity.set( 0, 0, 0 );
+			insect.holder.visible = true;
+
+		}
+
+		insect.target.set( home.x, height, home.y );
+		insect.state = 'returning';
+		insect.wait = 0;
+		insect.leg = 0;
+
+	}
+
+	_fly( insect, dt, camera ) {
 
 		const { flight, position, velocity, target } = insect;
 
-		if ( insect.wait > 0 ) {
+		if ( insect.pending ) {
+
+			insect.delay -= dt;
+
+			if ( insect.delay <= 0 && camera ) {
+
+				if ( insect.pending === 'leave' && insect.state !== 'gone' ) this._startLeaving( insect, camera );
+				else if ( insect.pending === 'return' && insect.state !== 'roam' ) this._startReturning( insect, camera );
+				insect.pending = null;
+
+			}
+
+		}
+
+		if ( insect.state === 'gone' ) return;
+
+		if ( insect.state === 'leaving' || insect.state === 'returning' ) {
+
+			// A purposeful flight: quicker than its roaming, straight to the point.
+			_toTarget.subVectors( target, position );
+			const distance = _toTarget.length();
+			insect.leg += dt;
+
+			if ( distance < 0.12 || insect.leg > 14 ) {
+
+				if ( insect.state === 'leaving' ) {
+
+					insect.state = 'gone';
+					insect.holder.visible = false;
+					velocity.set( 0, 0, 0 );
+					return;
+
+				}
+
+				insect.state = 'roam';
+				const [ lo, hi ] = flight.pause;
+				insect.wait = Math.max( 1e-3, lo + this.random() * ( hi - lo ) );
+
+			} else {
+
+				const hurry = Math.max( insect.speed * 2.2, 0.9 );
+				const slowing = insect.state === 'returning' ? Math.min( 1, distance / ( hurry * 0.6 ) ) : 1;
+				_toTarget.multiplyScalar( hurry * slowing / distance );
+				velocity.lerp( _toTarget, Math.min( 1, flight.agility * 0.6 * dt ) );
+
+			}
+
+		} else if ( insect.wait > 0 ) {
 
 			insect.wait -= dt;
 			velocity.multiplyScalar( Math.max( 0, 1 - dt * 6 ) );
@@ -397,7 +546,8 @@ export class Insects {
 			const insect = this.insects[ i ];
 			insect.time += dt;
 
-			this._fly( insect, dt );
+			this._fly( insect, dt, camera );
+			if ( insect.state === 'gone' ) continue;
 
 			// A flat drawing seen edge-on vanishes, so it turns to face the camera, and is
 			// mirrored to point the way it is flying. The threshold stops it flipping back
@@ -456,6 +606,9 @@ export class Insects {
 }
 
 const _toTarget = new THREE.Vector3();
+const _forward = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _exit = new THREE.Vector3();
 const _sample = { y: 0, nx: 0, ny: 1, nz: 0 };
 const _local = new THREE.Vector3();
 const _normal = new THREE.Vector3();

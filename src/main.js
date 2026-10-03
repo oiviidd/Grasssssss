@@ -35,7 +35,7 @@ import { Flowers } from './Flowers.js';
 import { Insects } from './Insects.js';
 import { exportGLB, exportOBJ, loadCustomTerrain } from './TerrainIO.js';
 import { Mountain, createMountainGeometry, bakeMountainMap } from './Mountain.js';
-import { Cabin } from './Cabin.js';
+import { Cabin, markDetails, bakeDetailShadow } from './Cabin.js';
 import { DayNight } from './DayNight.js';
 import { SHOT, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
@@ -1610,7 +1610,7 @@ async function importMountain( panel ) {
  * Swaps in an artist's cabin or door. `which` is 'wall' for the building — which may well be
  * the whole cabin, door and all — or 'door' for a door modelled as a separate leaf.
  */
-export function installCabinAsset( { geometry, map, baked, triangles }, which = 'wall', { fit = true, rebuild = true } = {} ) {
+export function installCabinAsset( { geometry, map, baked, triangles, parts }, which = 'wall', { fit = true, rebuild = true } = {} ) {
 
 	if ( ! geometry.attributes.uv ) {
 
@@ -1628,6 +1628,11 @@ export function installCabinAsset( { geometry, map, baked, triangles }, which = 
 	if ( which === 'wall' ) {
 
 		cabinWallGeometry = geometry;
+
+		// The emblem on the door travels in the same file; it gets its relief and shadow back.
+		if ( cabinDetail && cabinDetail.mask ) cabinDetail.mask.dispose();
+		cabinDetail = markDetails( geometry, parts );
+		if ( cabinDetail ) cabinDetail.mask = bakeDetailShadow( renderer, geometry, cabinDetail );
 
 		// Fitted to the blockout's height, so every framing tuned against it — desktop and phone
 		// alike — carries over. cabin.glb stands 1.63 units to the blockout's 1.35, and at full
@@ -1967,6 +1972,7 @@ let mountainMap = null;
 
 let cabinWallGeometry = null;
 let cabinDoorGeometry = null;
+let cabinDetail = null;
 let cabinWallMap = null;
 let cabinDoorMap = null;
 
@@ -2034,7 +2040,10 @@ function buildCabin() {
 		exposure: tuned.cabinExposure,
 		unlit: tuned.cabinUnlit,
 		lampPosition: CABIN.lampPosition,
-		lampWall: CABIN.lampWall
+		lampWall: CABIN.lampWall,
+		detail: cabinDetail,
+		detailShadow: CABIN.emblemShadow,
+		detailRelief: CABIN.emblemRelief
 	} ) );
 
 	placeCabin();
@@ -2408,12 +2417,34 @@ function setDayNight( on ) {
 }
 
 /** The time-of-day test cycle: off by default, run from the panel's Day / night group. */
+const _moonRise = new THREE.Vector3();
+
 function updateDayNight( dt ) {
 
-	dayNight.update( dt, cameraRig.baseQuaternion );
+	// The moon comes up behind the middle of the cabin, wherever the layout has put it.
+	let moonRise = null;
+
+	if ( cabin.wall ) {
+
+		if ( ! cabin.wall.geometry.boundingBox ) cabin.wall.geometry.computeBoundingBox();
+		cabin.wall.geometry.boundingBox.getCenter( _moonRise );
+		moonRise = cabin.wall.localToWorld( _moonRise );
+
+	}
+
+	dayNight.update( dt, {
+		position: cameraRig.basePosition,
+		quaternion: cameraRig.baseQuaternion,
+		fov: camera.fov,
+		aspect: camera.aspect,
+		moonRise
+	} );
 
 	uniforms.u_lampWall.value = cabin.lampWorld( uniforms.u_lampPosition.value, uniforms.u_lampNormal.value );
 	cabin.setLampGlow( dayNight.lamp );
+
+	// The day's insects fly off at dusk and come back after sunrise.
+	insects.setPresent( dayNight.insectsOut );
 
 	grade.tintOpacity = tuned.tintOpacity * dayNight.tintScale;
 	grade.tintColor.copy( dayNight.tintColor );

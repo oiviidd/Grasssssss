@@ -246,10 +246,15 @@ parameters.
 - **The look** — `SHOT.grade` in `src/shot.js`. `tintColorHex` and `tintOpacity` move
   the image furthest; `bloomThreshold` decides how much of the grass blooms.
 - **Day / night** — a test rig, off by default: a quick double `Space` starts and stops
-  it from anywhere, and the menu's *Day / night (test)* group does the same, sets its speed (in game hours per second, up to a whole day a second) and
-  scrubs the hour. The palette for each sun height is `KEYS` in `src/DayNight.js`; the
-  lantern's spot on the cabin model is `CABIN.lampPosition` in `src/shot.js`. Switching
-  it off puts every value back to the daylight shot.
+  it from anywhere, and the menu's *Day / night (test)* group does the same, sets its
+  speed (in game hours per second, up to a whole day a second) and scrubs the hour. The
+  palette for each sun height is `KEYS` in `src/DayNight.js`. At dusk the insects fly off
+  out of frame and come back after sunrise, and the moon rises from behind the cabin.
+  The lantern's spot on the cabin model is `CABIN.lampPosition` in `src/shot.js`.
+  Switching it off puts every value back to the daylight shot.
+- **The emblem on the door** — `CABIN.emblemShadow` and `CABIN.emblemRelief` in
+  `src/shot.js`: its soft drop shadow on the door and how strongly its edges catch the
+  light. It keeps the door's own paint either way.
 
 ---
 

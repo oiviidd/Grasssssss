@@ -260,7 +260,7 @@ export const CABIN = {
 
 	// Tuned in the browser for the artist's model, assets/models/cabin_custom.glb, which loads
 	// at startup: baked lighting, so unlit. The model carries two objects — the cabin and the
-	// logo on its gable — each with its own texture; the importer packs them into one atlas.
+	// emblem on its door — each with its own texture; the importer packs them into one atlas.
 	modelScale: 1.54,
 	screenX: - 0.23,
 	exposure: 0.8,
@@ -272,6 +272,12 @@ export const CABIN = {
 	// measuring again.
 	lampPosition: [ - 0.01, 1.09, 0.85 ],
 	lampWall: 0.11,
+
+	// The emblem on the door: same paint as the door, so it needs a little help to read.
+	// emblemShadow is how dark its soft drop shadow on the door gets (0 = none), emblemRelief
+	// how strongly its edges catch the light (0 = flat, as baked).
+	emblemShadow: 0.45,
+	emblemRelief: 1,
 
 	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
 	// +0.49, and lets the rest run off the edge.

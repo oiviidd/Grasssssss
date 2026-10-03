@@ -261,7 +261,7 @@ const ATLAS_PADDING = 8;
  * Packs each part's texture into one atlas and moves its UVs into its tile.
  *
  * The mountain and cabin shaders take a single map. A file with two objects painted from two
- * images — the cabin and the logo on its gable — used to be drawn entirely from the first
+ * images — the cabin and the emblem on its door — used to be drawn entirely from the first
  * image, so the second object sampled someone else's paint. Packing keeps one material and one
  * draw call. A part with no texture gets a small tile of its flat colour.
  */
@@ -436,6 +436,14 @@ export async function parseGLBWithMap( arrayBuffer ) {
 	// `baked` means the lighting is already painted in; one baked part is enough to call the
 	// whole prop baked, since a single material cannot light half of it.
 	const baked = paints.some( p => p.baked );
+
+	// Each object's slice of the merged buffers, in merge order: vertices and index entries are
+	// both concatenated part after part, so a part can still be picked out after the merge.
+	const ranges = parts.map( p => ( {
+		vertices: p.geometry.attributes.position.count,
+		indices: p.geometry.index ? p.geometry.index.count : 0
+	} ) );
+
 	const geometry = await mergeGeometries( parts.map( p => p.geometry ) );
 
 	const index = geometry.getIndex();
@@ -443,7 +451,7 @@ export async function parseGLBWithMap( arrayBuffer ) {
 
 	// `baked` means the lighting is already painted in, so the prop should be drawn unlit —
 	// lighting it again from the sky would shade every shadow twice.
-	return { geometry, map, baked, triangles };
+	return { geometry, map, baked, triangles, parts: ranges };
 
 }
 

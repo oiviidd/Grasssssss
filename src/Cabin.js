@@ -271,6 +271,171 @@ export function bakeCabinLampMap( {
 
 }
 
+/* ── details: the emblem on the door ───────────────────────────────────────── */
+
+/**
+ * Tags the small objects an imported cabin carries on top of the building — today the
+ * emblem on its door — with a `detail` attribute, and measures them for the shadow.
+ *
+ * The importer merges every object into one geometry, so they are told apart by the part
+ * ranges it reports: the largest part is the building, every other part a detail. Call
+ * after the geometry has been seated, since the measurements are in its final space.
+ *
+ * Returns null when there is nothing to mark. The shadow is only measured for details that
+ * lie flat on a wall facing +z, the way the emblem sits on the door; anything else keeps
+ * its relief shading and simply casts no shadow.
+ */
+export function markDetails( geometry, parts ) {
+
+	if ( ! parts || parts.length < 2 || ! geometry.index ) return null;
+
+	const body = parts.reduce( ( best, part, i ) => part.vertices > parts[ best ].vertices ? i : best, 0 );
+
+	const count = geometry.attributes.position.count;
+	const flags = new Float32Array( count );
+	const position = geometry.attributes.position;
+	const box = new THREE.Box3();
+	const point = new THREE.Vector3();
+	const indices = [];
+
+	let vertex = 0;
+	let entry = 0;
+
+	parts.forEach( ( part, i ) => {
+
+		if ( i !== body ) {
+
+			flags.fill( 1, vertex, vertex + part.vertices );
+
+			for ( let v = vertex; v < vertex + part.vertices; v ++ ) box.expandByPoint( point.fromBufferAttribute( position, v ) );
+
+			const source = geometry.index.array;
+			for ( let k = entry; k < entry + part.indices; k ++ ) indices.push( source[ k ] );
+
+		}
+
+		vertex += part.vertices;
+		entry += part.indices;
+
+	} );
+
+	if ( vertex !== count ) return null; // ranges do not describe this geometry
+
+	geometry.setAttribute( 'detail', new THREE.BufferAttribute( flags, 1 ) );
+
+	const size = box.getSize( new THREE.Vector3() );
+	const flat = size.z < Math.min( size.x, size.y ) * 0.2;
+
+	// A margin round the silhouette for the blur and the offset to land in.
+	const margin = Math.max( size.x, size.y ) * 0.2;
+
+	return {
+		index: new Uint32Array( indices ),
+		flat,
+		rect: new THREE.Vector4( box.min.x - margin, box.min.y - margin, size.x + margin * 2, size.y + margin * 2 ),
+		depth: new THREE.Vector2( box.min.z, box.max.z ),
+		mask: null
+	};
+
+}
+
+/**
+ * The detail's silhouette, seen straight down its wall and softened: the shadow mask the
+ * cabin shader samples. Rendered once, at import.
+ */
+export function bakeDetailShadow( renderer, geometry, detail, { size = 256, blur = 3 } = {} ) {
+
+	if ( ! detail || ! detail.flat ) return null;
+
+	const silhouette = new THREE.BufferGeometry();
+	silhouette.setAttribute( 'position', geometry.attributes.position );
+	silhouette.setIndex( new THREE.BufferAttribute( detail.index, 1 ) );
+
+	const scene = new THREE.Scene();
+	scene.add( new THREE.Mesh( silhouette, new THREE.MeshBasicMaterial( { color: 0xffffff, side: THREE.DoubleSide } ) ) );
+
+	const { x, y, z: w, w: h } = detail.rect;
+	const camera = new THREE.OrthographicCamera( x, x + w, y + h, y, 0.01, 10 );
+	camera.position.set( 0, 0, detail.depth.y + 1 );
+
+	const target = new THREE.WebGLRenderTarget( size, size, { depthBuffer: true, stencilBuffer: false } );
+	const pixels = new Uint8Array( size * size * 4 );
+
+	const previousTarget = renderer.getRenderTarget();
+	const previousColor = renderer.getClearColor( new THREE.Color() ).clone();
+	const previousAlpha = renderer.getClearAlpha();
+
+	renderer.setRenderTarget( target );
+	renderer.setClearColor( 0x000000, 1 );
+	renderer.clear( true, true, true );
+	renderer.render( scene, camera );
+	renderer.readRenderTargetPixels( target, 0, 0, size, size, pixels );
+
+	renderer.setRenderTarget( previousTarget );
+	renderer.setClearColor( previousColor, previousAlpha );
+
+	target.dispose();
+	scene.children[ 0 ].material.dispose();
+	// Only the throwaway index is freed: the positions belong to the cabin itself.
+	silhouette.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( 3 ), 3 ) );
+	silhouette.dispose();
+
+	// Three box passes each way come close enough to a Gaussian for a shadow.
+	let value = new Float32Array( size * size );
+	for ( let i = 0; i < value.length; i ++ ) value[ i ] = pixels[ i * 4 ] / 255;
+
+	let scratch = new Float32Array( size * size );
+
+	for ( let pass = 0; pass < 3; pass ++ ) {
+
+		for ( const [ dx, dy ] of [ [ 1, 0 ], [ 0, 1 ] ] ) {
+
+			for ( let py = 0; py < size; py ++ ) {
+
+				for ( let px = 0; px < size; px ++ ) {
+
+					let sum = 0;
+
+					for ( let k = - blur; k <= blur; k ++ ) {
+
+						const sx = Math.min( size - 1, Math.max( 0, px + k * dx ) );
+						const sy = Math.min( size - 1, Math.max( 0, py + k * dy ) );
+						sum += value[ sy * size + sx ];
+
+					}
+
+					scratch[ py * size + px ] = sum / ( blur * 2 + 1 );
+
+				}
+
+			}
+
+			[ value, scratch ] = [ scratch, value ];
+
+		}
+
+	}
+
+	const data = new Uint8Array( size * size * 4 );
+
+	for ( let i = 0; i < value.length; i ++ ) {
+
+		const v = Math.round( value[ i ] * 255 );
+		data[ i * 4 ] = data[ i * 4 + 1 ] = data[ i * 4 + 2 ] = v;
+		data[ i * 4 + 3 ] = 255;
+
+	}
+
+	// Read back bottom row first, which is exactly how a DataTexture lays out v = 0.
+	const mask = new THREE.DataTexture( data, size, size, THREE.RGBAFormat );
+	mask.minFilter = THREE.LinearFilter;
+	mask.magFilter = THREE.LinearFilter;
+	mask.needsUpdate = true;
+
+	return mask;
+
+}
+
 /* ── the cabin ─────────────────────────────────────────────────────────────── */
 
 const _forward = new THREE.Vector3();
@@ -374,6 +539,12 @@ export class Cabin {
 				u_faceTint: { value: options.faceTint !== undefined ? options.faceTint : 0.32 },
 				u_alphaTest: { value: extra.alphaTest !== undefined ? extra.alphaTest : - 1 },
 				u_lodBias: { value: - 0.5 },
+				u_detailRelief: { value: 0 },
+				u_detailShadow: { value: 0 },
+				u_detailMask: { value: null },
+				u_detailRect: { value: new THREE.Vector4( 0, 0, 1, 1 ) },
+				u_detailDepth: { value: new THREE.Vector2() },
+				u_detailOffset: { value: new THREE.Vector2() },
 				u_envTexture: this.uniforms.u_envTexture,
 				u_fogBox: this.uniforms.u_fogBox,
 				u_fogCentre: this.uniforms.u_fogCentre,
@@ -414,6 +585,21 @@ export class Cabin {
 		if ( ! importedWall ) this.owned.add( wallGeometry );
 
 		this.wall = new THREE.Mesh( wallGeometry, this._material( wallMap, options ) );
+
+		// The emblem on the door, when the imported model carries one (see markDetails).
+		const detail = importedWall ? options.detail : null;
+
+		if ( detail && detail.mask ) {
+
+			const u = this.wall.material.uniforms;
+			u.u_detailRelief.value = options.detailRelief !== undefined ? options.detailRelief : 1;
+			u.u_detailShadow.value = options.detailShadow !== undefined ? options.detailShadow : 0.5;
+			u.u_detailMask.value = detail.mask;
+			u.u_detailRect.value.copy( detail.rect );
+			u.u_detailDepth.value.copy( detail.depth );
+			u.u_detailOffset.value.fromArray( options.detailShadowOffset || [ 0.008, - 0.012 ] );
+
+		}
 
 		this.wall.position.y = importedWall ? 0 : height * 0.5;
 		this.container.add( this.wall );
