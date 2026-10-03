@@ -18,9 +18,11 @@ from the filesystem will fail on ES modules and `fetch`.
 | drag | look around |
 | scroll | dolly |
 | move cursor | part the grass |
-| `G` / `O` | export the hill as .glb / .obj |
-| `R` | reset the framing |
-| `H` | hide the overlay |
+| `Enter` `Enter` `K` `M` `Enter` `Enter` | open the menu (hidden by default; its *Hide* button closes it) |
+| `Space` `Space` | start / stop the day / night test — works with the menu closed |
+| `G` / `O` | export the hill as .glb / .obj — menu open only |
+| `R` | reset the framing — menu open only |
+| `W A S D Q E` | fly — menu open only |
 
 ---
 
@@ -214,6 +216,7 @@ src/
   Grass.js           instanced blades + re-seated sculpted tufts
   Flowers.js         instanced billboards over the 5-cell atlas
   Insects.js         sprite-sheet bee / dragonfly / fly
+  DayNight.js        test-only day / night loop: sky tint, sun glow, moon, door lantern
   TerrainIO.js       .glb / .obj export, custom-hill import
   CameraRig.js       mouse-look about a pivot, free look, handheld shake
   Postprocessing.js  bloom + final grade
@@ -242,6 +245,11 @@ parameters.
   1386 tufts and ~470 flowers.
 - **The look** — `SHOT.grade` in `src/shot.js`. `tintColorHex` and `tintOpacity` move
   the image furthest; `bloomThreshold` decides how much of the grass blooms.
+- **Day / night** — a test rig, off by default: a quick double `Space` starts and stops
+  it from anywhere, and the menu's *Day / night (test)* group does the same, sets its speed (in game hours per second, up to a whole day a second) and
+  scrubs the hour. The palette for each sun height is `KEYS` in `src/DayNight.js`; the
+  lantern's spot on the cabin model is `CABIN.lampPosition` in `src/shot.js`. Switching
+  it off puts every value back to the daylight shot.
 
 ---
 

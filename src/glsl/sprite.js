@@ -12,8 +12,9 @@
  * Note `uv.y` is flipped — the atlases are authored top-left origin.
  *
  * The fragment shader is deliberately unlit: no fog, no normal term. These sit on top
- * of the world as drawings. `u_hasAlpha` switches between an RGBA sprite and a
- * single-channel mask read from .r (which the original used for the black silhouettes).
+ * of the world as drawings, dimmed only by the time of day. `u_hasAlpha` switches
+ * between an RGBA sprite and a single-channel mask read from .r (which the original
+ * used for the black silhouettes).
  */
 export const spriteVert = /* glsl */`
 attribute vec3 position;
@@ -61,5 +62,8 @@ void main () {
 	gl_FragColor = texture2D(u_texture, v_uv);
 	gl_FragColor = u_hasAlpha > 0.5 ? gl_FragColor : vec4(0.0, 0.0, 0.0, gl_FragColor.r);
 	if (gl_FragColor.a < 0.1) discard;
+
+	// Still no fog, but they share the time of day, the lamp included.
+	gl_FragColor.rgb = applyLight(gl_FragColor.rgb, v_worldPosition);
 }
 `;

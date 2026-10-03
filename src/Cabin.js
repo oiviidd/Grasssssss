@@ -19,7 +19,8 @@
  */
 import * as THREE from '../vendor/three.module.js';
 import { fbm } from './HillGeometry.js';
-import { cabinVert, cabinFrag } from './glsl/cabin.js';
+import { cabinVert, cabinFrag, lampGlowVert, lampGlowFrag } from './glsl/cabin.js';
+import { dayNightUniforms } from './glsl/fog.js';
 
 /* ── helpers ───────────────────────────────────────────────────────────────── */
 
@@ -274,6 +275,7 @@ export function bakeCabinLampMap( {
 
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
+const _lampGlass = new THREE.Vector3();
 
 export class Cabin {
 
@@ -289,6 +291,55 @@ export class Cabin {
 		this.maps = [];
 		// Imported geometry outlives a rebuild; generated geometry does not.
 		this.owned = new Set();
+
+		// Where the door lantern hangs, in the container's space, and how far in front of
+		// its wall. The time of day lights the scene from here at night (see DayNight.js).
+		this.lampAnchor = new THREE.Object3D();
+		this.lampWall = 0.12;
+		this.container.add( this.lampAnchor );
+
+		this.lampGlow = new THREE.Mesh(
+			new THREE.PlaneBufferGeometry( 1, 1 ),
+			new THREE.ShaderMaterial( {
+				uniforms: {
+					u_color: { value: new THREE.Vector3( 1.0, 0.62, 0.28 ) },
+					u_glow: { value: 0 },
+					u_size: { value: 1.1 },
+					u_pull: { value: 0.35 }
+				},
+				vertexShader: lampGlowVert,
+				fragmentShader: lampGlowFrag,
+				transparent: true,
+				blending: THREE.AdditiveBlending,
+				depthWrite: false
+			} )
+		);
+		this.lampGlow.frustumCulled = false;
+		this.lampGlow.renderOrder = 10;
+		this.lampGlow.visible = false;
+		this.lampAnchor.add( this.lampGlow );
+
+	}
+
+	/** Lantern glow, 0 (off, by day) to 1 (full night). */
+	setLampGlow( level ) {
+
+		this.lampGlow.material.uniforms.u_glow.value = level;
+		this.lampGlow.visible = level > 0.001;
+
+	}
+
+	/**
+	 * The lantern in world space, for the light it throws: its position, the direction out
+	 * of the wall it hangs on, and the returned distance it hangs in front of that wall.
+	 */
+	lampWorld( position, normal ) {
+
+		this.container.updateMatrixWorld();
+		this.lampAnchor.getWorldPosition( position );
+		normal.set( 0, 0, 1 ).transformDirection( this.container.matrixWorld );
+
+		return this.lampWall * this.container.scale.x;
 
 	}
 
@@ -322,6 +373,7 @@ export class Cabin {
 				u_unlit: { value: options.unlit !== undefined ? options.unlit : 0 },
 				u_faceTint: { value: options.faceTint !== undefined ? options.faceTint : 0.32 },
 				u_alphaTest: { value: extra.alphaTest !== undefined ? extra.alphaTest : - 1 },
+				u_lodBias: { value: - 0.5 },
 				u_envTexture: this.uniforms.u_envTexture,
 				u_fogBox: this.uniforms.u_fogBox,
 				u_fogCentre: this.uniforms.u_fogCentre,
@@ -330,7 +382,8 @@ export class Cabin {
 				u_fogRange: this.uniforms.u_fogRange,
 				u_hazeStart: this.uniforms.u_hazeStart,
 				u_hazeRange: this.uniforms.u_hazeRange,
-				u_hazeAmount: this.uniforms.u_hazeAmount
+				u_hazeAmount: this.uniforms.u_hazeAmount,
+				...dayNightUniforms( this.uniforms )
 			},
 			vertexShader: cabinVert,
 			fragmentShader: cabinFrag
@@ -435,6 +488,25 @@ export class Cabin {
 				depth * 0.5 + 0.02 );
 
 			this.container.add( this.lamp );
+
+		}
+
+		// The light source: the artist's lantern when the model has one (its spot measured on
+		// the model and kept in shot.js), otherwise the generated lamp's glass.
+		if ( importedWall && options.lampPosition ) {
+
+			this.lampAnchor.position.fromArray( options.lampPosition );
+			this.lampWall = options.lampWall !== undefined ? options.lampWall : 0.12;
+
+		} else if ( this.lamp ) {
+
+			this.lampAnchor.position.copy( this.lamp.position ).add( _lampGlass.set( 0, - 0.04, 0.06 ) );
+			this.lampWall = 0.08;
+
+		} else {
+
+			this.lampAnchor.position.set( options.doorOffsetX || 0, doorHeight + 0.25, depth * 0.5 + 0.1 );
+			this.lampWall = 0.1;
 
 		}
 

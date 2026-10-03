@@ -170,30 +170,31 @@ export const FOG = {
  *            three is vertical, so a portrait phone crops the sides away; a cone pinned to
  *            a world x simply leaves the shot. anchorX is NDC (-1 left edge, +1 right).
  *
- * distance is held under the sky sphere's radius of 15. That sphere is pinned to the
- * camera and writes depth, so anything past it is occluded by the sky itself.
+ * distance is free up to the camera's far plane (120). The sky sphere is only a backdrop —
+ * it writes no depth — so the cone can stand well behind the meadow rather than sinking
+ * into its ridge.
  */
 export const MOUNTAIN = {
-	distance: 11.8,
+	distance: 26.6,
 
 	// The *summit* height, not the base. Shrinking the cone for a narrow viewport used to
 	// drop its peak below the meadow's ridge and hide it completely; pinning the summit
 	// means scale only narrows the silhouette, and the peak clears the grass by the same
 	// margin on every screen. The base goes wherever it must — the meadow covers it.
-	summitY: 2.8,
+	summitY: 5.25,
 
 	// Tuned in the browser for the artist's model, assets/models/mountain_custom.glb, which
 	// loads at startup. Its texture has the lighting baked in, so it is drawn unlit.
-	modelScale: 0.58,
-	screenX: - 0.03,
+	modelScale: 1.74,
+	screenX: 0.03,
 	exposure: 0.75,
 	unlit: 1,
 
 	// Flat distance haze, plus a separate bank of mist around the foot: the base dissolves
 	// while the upper flanks keep their colour. Flat haze alone can only wash the cone evenly.
 	haze: 0,
-	baseMist: 0.16,
-	baseMistHeight: 0.46,
+	baseMist: 0.2,
+	baseMistHeight: 0.52,
 
 	// Framing per viewport shape. anchorX is NDC; width/height scale the cone.
 	//
@@ -253,17 +254,24 @@ export const CABIN = {
 	// buries it — occlusion does not care how well the proportions match. So it stands close
 	// and is built small to suit: on screen that is indistinguishable from a large cabin
 	// further off, and it is the only version the camera can actually see.
-	distance: 6.484,
-	yaw: - 1.02,
-	sink: 0.15,
+	distance: 7.6,
+	yaw: - 1.05,
+	sink: 0.09,
 
 	// Tuned in the browser for the artist's model, assets/models/cabin_custom.glb, which loads
 	// at startup: baked lighting, so unlit. The model carries two objects — the cabin and the
 	// logo on its gable — each with its own texture; the importer packs them into one atlas.
-	modelScale: 1.62,
-	screenX: - 0.17,
-	exposure: 0.75,
+	modelScale: 1.54,
+	screenX: - 0.23,
+	exposure: 0.8,
 	unlit: 1,
+
+	// Where the lantern over the door hangs on cabin_custom.glb, in the model's own units as
+	// seated (lowest point at y = 0), and how far in front of the wall it stands. The night
+	// lights the scene from here. Measured by raycasting the glass, so a new model needs
+	// measuring again.
+	lampPosition: [ - 0.01, 1.09, 0.85 ],
+	lampWall: 0.11,
 
 	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
 	// +0.49, and lets the rest run off the edge.
@@ -324,7 +332,9 @@ export const RESPONSIVE = {
 
 /**
  * Insects, placed by hand. `y` is height *above the ground*, so these survive a change
- * of hill. `strength` scales the wander amplitude.
+ * of hill. `position` is now each one's *home*: it roams freely around it (how far and how
+ * fast per species is FLIGHT in Insects.js), and `strength` scales that range and speed.
+ * `yaw` no longer applies — the sprites turn to face the camera and the way they fly.
  */
 // Kept clear of the lens: at a camera distance of ~3 a 0.3-unit sprite one unit away
 // fills a third of the frame, so these sit mid-ground and beyond.
@@ -333,5 +343,5 @@ export const INSECTS = [
 	{ type: 'bee', position: [ - 0.85, 0.26, - 0.35 ], yaw: - 0.6, scale: 0.17, strength: 1.2 },
 	{ type: 'bee', position: [ 1.45, 0.30, 1.25 ], yaw: 1.1, scale: 0.15, strength: 0.9 },
 	{ type: 'fly', position: [ - 1.55, 0.22, - 1.15 ], yaw: - 1.4, scale: 0.13, strength: 1.4 },
-	{ type: 'dragonfly', position: [ 2.15, 0.40, - 1.35 ], yaw: 2.3, scale: 0.22, strength: 0.8 }
+	{ type: 'dragonfly', position: [ - 0.2, 0.40, - 2.1 ], yaw: 2.3, scale: 0.22, strength: 0.8 }
 ];

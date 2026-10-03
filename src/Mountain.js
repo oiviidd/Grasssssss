@@ -19,6 +19,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { fbm } from './HillGeometry.js';
 import { mountainVert, mountainFrag } from './glsl/mountain.js';
+import { dayNightUniforms } from './glsl/fog.js';
 
 /**
  * `profile` is the exponent on the radius falloff: 1 is a straight cone, higher is
@@ -297,7 +298,8 @@ export class Mountain {
 				u_modelHeightRange: { value: new THREE.Vector2( geometry.boundingBox.min.y, geometry.boundingBox.max.y ) },
 				u_baseMist: { value: options.baseMist !== undefined ? options.baseMist : 0.55 },
 				u_baseMistHeight: { value: options.baseMistHeight !== undefined ? options.baseMistHeight : 0.45 },
-				u_envTexture: this.uniforms.u_envTexture
+				u_envTexture: this.uniforms.u_envTexture,
+				...dayNightUniforms( this.uniforms )
 			},
 			vertexShader: mountainVert,
 			fragmentShader: mountainFrag

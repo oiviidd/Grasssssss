@@ -78,11 +78,11 @@ void main () {
 	light = mix(vec3(lum), light, u_lightTint);
 	light = mix(light, vec3(1.0), u_unlit);
 
-	vec3 color = albedo * light * u_exposure;
+	vec3 color = applyLight(albedo * light * u_exposure, v_worldPosition);
 
 	// Aerial perspective, toward the sky actually behind the mountain. v_heightRatio runs base
 	// to summit, so the mist is thickest at the foot and gone by u_baseMistHeight.
-	vec3 skyColor = sampleSky(normalize(v_worldPosition - cameraPosition));
+	vec3 skyColor = skyView(normalize(v_worldPosition - cameraPosition));
 	float mist = u_baseMist * (1.0 - smoothstep(0.0, max(0.001, u_baseMistHeight), v_heightRatio));
 
 	color = mix(color, skyColor, clamp(u_haze + mist, 0.0, 1.0));

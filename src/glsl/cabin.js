@@ -41,6 +41,11 @@ uniform float u_unlit;
 uniform float u_faceTint;
 uniform float u_alphaTest;
 
+// Negative mip bias. At the shot's distance the 4K bake is minified roughly 4:1, and plain
+// trilinear filtering then blends toward the next, blurrier level; nudging the pick half a
+// level sharper brings the carving and the grain back without visible shimmer.
+uniform float u_lodBias;
+
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec2 v_uv;
@@ -48,7 +53,7 @@ varying vec2 v_uv;
 #include <lusionFog>
 
 void main () {
-	vec4 texel = texture2D(u_map, v_uv);
+	vec4 texel = texture2D(u_map, v_uv, u_lodBias);
 	if (texel.a < u_alphaTest) discard;
 
 	vec3 n = normalize(mix(v_worldNormal, vec3(0.0, 1.0, 0.0), u_lightWrap));
@@ -67,5 +72,41 @@ void main () {
 	vec3 color = texel.rgb * light * u_exposure * shade;
 
 	gl_FragColor = vec4(applyFog(color, v_worldPosition), 1.0);
+}
+`;
+
+/**
+ * ── LANTERN GLOW ───────────────────────────────────────────────────────────────
+ * The halo round the door lantern at night: a camera-facing quad, added on top. The
+ * light it throws on the wall and the meadow is applyLight's job (glsl/fog.js); this is
+ * only the glow in the air around the glass, which is also what sets the bloom off.
+ *
+ * Pulled toward the camera by u_pull so the wall the lantern hangs on does not cut the
+ * halo in half. It still depth-tests, so from behind the cabin it stays hidden.
+ */
+export const lampGlowVert = /* glsl */`
+uniform float u_size;
+uniform float u_pull;
+varying vec2 v_offset;
+
+void main () {
+	vec4 mvPosition = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+	mvPosition.xyz += normalize(- mvPosition.xyz) * u_pull;
+	mvPosition.xy += position.xy * u_size;
+
+	v_offset = position.xy * 2.0;
+	gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+export const lampGlowFrag = /* glsl */`
+uniform vec3 u_color;
+uniform float u_glow;
+varying vec2 v_offset;
+
+void main () {
+	float r2 = dot(v_offset, v_offset);
+	float glow = exp(- r2 * 60.0) * 0.9 + exp(- r2 * 9.0) * 0.32 + exp(- r2 * 3.0) * 0.08;
+	gl_FragColor = vec4(u_color * glow * u_glow, 1.0);
 }
 `;

@@ -15,6 +15,7 @@ import * as THREE from '../vendor/three.module.js';
 import { loadBuf } from './BufLoader.js';
 import { PRECISION_PREFIX } from './FboHelper.js';
 import { instancedGrassVert, instancedGrassFrag, plantVert, plantFrag } from './glsl/grass.js';
+import { dayNightUniforms } from './glsl/fog.js';
 import { scatterOnSurface, orientToNormal, makeRandom } from './Scatter.js';
 
 /** Shrinks a footprint inward, for props that should keep clear of the very edge. */
@@ -203,6 +204,7 @@ export class Grass {
 				u_hazeStart: this.uniforms.u_hazeStart,
 				u_hazeRange: this.uniforms.u_hazeRange,
 				u_hazeAmount: this.uniforms.u_hazeAmount,
+				...dayNightUniforms( this.uniforms ),
 				u_terrainGrassTexture: this.uniforms.u_terrainGrassTexture,
 				u_terrainDrawTexture: this.uniforms.u_terrainDrawTexture,
 				u_stageCentre: this.uniforms.u_stageCentre,

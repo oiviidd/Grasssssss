@@ -21,7 +21,7 @@
  */
 import * as THREE from '../vendor/three.module.js';
 import * as FboHelper from './FboHelper.js';
-import { fogChunk } from './glsl/fog.js';
+import { fogChunk, dayNightUniforms } from './glsl/fog.js';
 import { terrainVert, terrainFrag, terrainDrawFrag } from './glsl/terrain.js';
 import { skyVert, skyFrag } from './glsl/sky.js';
 import { quadVert } from './glsl/post.js';
@@ -36,6 +36,7 @@ import { Insects } from './Insects.js';
 import { exportGLB, exportOBJ, loadCustomTerrain } from './TerrainIO.js';
 import { Mountain, createMountainGeometry, bakeMountainMap } from './Mountain.js';
 import { Cabin } from './Cabin.js';
+import { DayNight } from './DayNight.js';
 import { SHOT, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
 import { pickFile, parseGLB, parseGLBWithMap, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
@@ -119,7 +120,9 @@ container.appendChild( renderer.domElement );
 const isWebGL2 = renderer.capabilities.isWebGL2;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera( 30, 1, 0.05, 20 );
+// Far plane well past the sky: the sky is a backdrop that never occludes (see below), so
+// this is what limits how far back the mountain can stand.
+const camera = new THREE.PerspectiveCamera( 30, 1, 0.05, 120 );
 const cameraRig = new CameraRig( camera, renderer.domElement );
 
 /* ── shared uniforms ───────────────────────────────────────────────────────── */
@@ -148,7 +151,24 @@ const uniforms = {
 	// Shared by everything that reads a baked terrain map. `value` aliases stage.centre,
 	// so moving the stage updates every material at once; the size has to be pushed.
 	u_stageCentre: { value: stage.centre },
-	u_stageSize: { value: stage.size }
+	u_stageSize: { value: stage.size },
+
+	// Time of day (DayNight.js, read in glsl/fog.js). All neutral here: white tint and
+	// ambient, no glow, no moon, lamp dark — the daylight shot.
+	u_skyTint: { value: new THREE.Vector3( 1, 1, 1 ) },
+	u_ambient: { value: new THREE.Vector3( 1, 1, 1 ) },
+	u_desaturate: { value: 0 },
+	u_sunDir: { value: new THREE.Vector3( 0, 1, 0 ) },
+	u_sunGlow: { value: new THREE.Vector3() },
+	u_moonDir: { value: new THREE.Vector3( 0, 1, 0 ) },
+	u_moonGlow: { value: new THREE.Vector3() },
+	u_moon: { value: 0 },
+	u_stars: { value: 0 },
+	u_lampPosition: { value: new THREE.Vector3() },
+	u_lampNormal: { value: new THREE.Vector3( 0, 0, 1 ) },
+	u_lampWall: { value: 0.15 },
+	u_lampColor: { value: new THREE.Vector3() },
+	u_lampRange: { value: 0.6 }
 };
 
 /* ── render targets ────────────────────────────────────────────────────────── */
@@ -246,6 +266,7 @@ const grass = new Grass( uniforms );
 const flowers = new Flowers( uniforms );
 const mountain = new Mountain( uniforms );
 const cabin = new Cabin( uniforms );
+const dayNight = new DayNight( uniforms, { tintHex: SHOT.grade.tintColorHex } );
 
 /**
  * An optional hand-off: null when the file is not there, the parsed prop when it is.
@@ -354,6 +375,8 @@ function build( assets ) {
 			uniforms: {
 				u_time: uniforms.u_time,
 				u_noiseTexture: { value: assets.noise },
+				u_moon: uniforms.u_moon,
+				u_stars: uniforms.u_stars,
 				u_envTexture: uniforms.u_envTexture,
 				u_fogBox: uniforms.u_fogBox,
 				u_fogCentre: uniforms.u_fogCentre,
@@ -362,14 +385,22 @@ function build( assets ) {
 				u_fogRange: uniforms.u_fogRange,
 				u_hazeStart: uniforms.u_hazeStart,
 				u_hazeRange: uniforms.u_hazeRange,
-				u_hazeAmount: uniforms.u_hazeAmount
+				u_hazeAmount: uniforms.u_hazeAmount,
+				...dayNightUniforms( uniforms )
 			},
 			vertexShader: skyVert,
 			fragmentShader: skyFrag,
-			side: THREE.BackSide
+			side: THREE.BackSide,
+			// A backdrop, not a wall. Writing depth at radius 15 cut off anything past it —
+			// pushing the mountain further back sliced its far side away, so it had to stay
+			// close enough to sink into the meadow's ridge instead.
+			depthWrite: false,
+			depthTest: false
 		} )
 	);
 	skyMesh.frustumCulled = false;
+	// Drawn before everything, the terrain's -1000 included, so the rest paints over it.
+	skyMesh.renderOrder = - 2000;
 	scene.add( skyMesh );
 
 	/* the mountain ------------------------------------------------------------ */
@@ -417,6 +448,7 @@ function build( assets ) {
 			u_hazeStart: uniforms.u_hazeStart,
 			u_hazeRange: uniforms.u_hazeRange,
 			u_hazeAmount: uniforms.u_hazeAmount,
+			...dayNightUniforms( uniforms ),
 			u_terrainInfoTexture: uniforms.u_terrainInfoTexture,
 			u_terrainGrassTexture: uniforms.u_terrainGrassTexture,
 			u_terrainRocksTexture: uniforms.u_terrainRocksTexture,
@@ -456,7 +488,7 @@ function build( assets ) {
 	} );
 	scene.add( flowers.container );
 
-	insects.build( surface, INSECTS );
+	insects.build( surface, INSECTS, { avoid: insectNoFlyZones() } );
 	scene.add( insects.container );
 
 	/* the cabin --------------------------------------------------------------- */
@@ -475,7 +507,10 @@ function build( assets ) {
 	updateStatus();
 
 	loaderEl.classList.add( 'is-hidden' );
-	document.getElementById( 'hud' ).classList.add( 'is-visible' );
+
+	// One menu: the HUD's status, hand-off buttons and key list live inside the tweak panel,
+	// and both stay hidden until the unlock sequence in bindInput().
+	panel.adopt( document.getElementById( 'hud' ) );
 
 	// Handle for poking at the scene from the console.
 	window.grassStudy = {
@@ -497,6 +532,7 @@ function build( assets ) {
 		get mountain() { return mountain; },
 		get cabin() { return cabin; },
 		tuned,
+		dayNight,
 		exportGLB: () => exportGLB( terrainMesh ),
 		exportOBJ: () => exportOBJ( terrainMesh ),
 
@@ -1040,6 +1076,28 @@ function buildTweakPanel( texture ) {
 
 			}
 
+			// A test rig: none of it is saved with the shot, and switching it off restores daylight.
+			if ( key === 'dayNight' ) {
+
+				setDayNight( value );
+				return;
+
+			}
+
+			if ( key === 'daySpeed' ) {
+
+				dayNight.speed = value;
+				return;
+
+			}
+
+			if ( key === 'dayHour' ) {
+
+				dayNight.hour = value;
+				return;
+
+			}
+
 			if ( key === 'grassExtent' || key === 'rimFade' || key === 'maxSlope' ) {
 
 				rimRadius = tuned.grassExtent;
@@ -1144,6 +1202,10 @@ function buildTweakPanel( texture ) {
 
 	panel
 		.toggle( 'freeze', 'Freeze camera (no shake / mouse-look)', true )
+		.group( 'Day / night (test)' )
+		.toggle( 'dayNight', 'Run the day / night cycle', dayNight.enabled )
+		.slider( 'daySpeed', 'speed (game hours / sec)', dayNight.speed, 0, 24, 0.1 )
+		.slider( 'dayHour', 'time of day (hour)', dayNight.hour, 0, 24, 0.01 )
 		.group( 'Camera' )
 		.slider( 'posX', 'position x', tuned.posX, - 15, 15, 0.01 )
 		.slider( 'posY', 'position y', tuned.posY, - 2, 10, 0.01 )
@@ -1173,7 +1235,7 @@ function buildTweakPanel( texture ) {
 		.slider( 'mountainDistance', 'distance', tuned.mountainDistance, 1, 40, 0.1 )
 		.slider( 'mountainScale', 'mountain scale', tuned.mountainScale, 0.2, 3, 0.01 )
 		.slider( 'mountainScreenX', 'mountain screen x', tuned.mountainScreenX, - 4, 4, 0.01 )
-		.slider( 'mountainSummitY', 'peak height', tuned.mountainSummitY, - 1, 6, 0.05 )
+		.slider( 'mountainSummitY', 'peak height', tuned.mountainSummitY, - 1, 10, 0.05 )
 		.slider( 'mountainBaseMist', 'base mist', tuned.mountainBaseMist, 0, 1, 0.01 )
 		.slider( 'mountainBaseMistHeight', 'mist height', tuned.mountainBaseMistHeight, 0.05, 1, 0.01 )
 		.slider( 'mountainExposure', 'brightness', tuned.mountainExposure, 0.1, 3, 0.05 )
@@ -1475,6 +1537,19 @@ async function importTuft( panel ) {
 }
 
 /**
+ * Full anisotropic filtering on an artist's map. Without it the cabin's side wall, which the
+ * camera sees at a grazing angle, drops to a mip level picked for its steepest axis and
+ * reads as a smear; the texture itself is 4K and has the detail.
+ */
+function sharpen( map ) {
+
+	map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+	map.needsUpdate = true;
+	return map;
+
+}
+
+/**
  * Swaps in an artist's mountain. Split from the file picker, like installTerrain, so a file
  * can be pushed in from the console or a test without a dialog.
  */
@@ -1496,7 +1571,7 @@ export function installMountainAsset( { geometry, map, baked, triangles }, { fit
 
 	// The artist's own painting wins over the procedural one. Without a texture in the file
 	// the generated map is simply wrapped onto their mesh.
-	if ( map ) mountainMap = map;
+	if ( map ) mountainMap = sharpen( map );
 
 	// Lighting painted into the texture is drawn flat rather than lit a second time, and at a
 	// lower exposure: a baked texture is an ordinary-brightness image, while the procedural map
@@ -1559,7 +1634,7 @@ export function installCabinAsset( { geometry, map, baked, triangles }, which = 
 		// size it filled the entire phone frame, mountain included.
 		const tall = geometry.boundingBox.max.y - geometry.boundingBox.min.y;
 		if ( fit && tall > 1e-6 ) setTuned( 'cabinScale', + ( CABIN_BLOCKOUT.height / tall ).toFixed( 2 ) );
-		if ( map ) cabinWallMap = map;
+		if ( map ) cabinWallMap = sharpen( map );
 
 		// Same reasoning as the mountain. Measured on cabin.glb: 0.5 puts the wall at
 		// [119,68,70] against the reference [118,41,48] and the door at [40,61,66] against
@@ -1574,7 +1649,7 @@ export function installCabinAsset( { geometry, map, baked, triangles }, which = 
 	} else {
 
 		cabinDoorGeometry = geometry;
-		if ( map ) cabinDoorMap = map;
+		if ( map ) cabinDoorMap = sharpen( map );
 
 	}
 
@@ -1877,7 +1952,7 @@ function rebuildEverything() {
 
 	insects.container.clear();
 	insects.insects.length = 0;
-	insects.build( surface, INSECTS );
+	insects.build( surface, INSECTS, { avoid: insectNoFlyZones() } );
 
 	updateStatus();
 
@@ -1957,7 +2032,9 @@ function buildCabin() {
 		wallMap: cabinWallMap,
 		doorMap: cabinDoorMap,
 		exposure: tuned.cabinExposure,
-		unlit: tuned.cabinUnlit
+		unlit: tuned.cabinUnlit,
+		lampPosition: CABIN.lampPosition,
+		lampWall: CABIN.lampWall
 	} ) );
 
 	placeCabin();
@@ -2000,6 +2077,22 @@ function placeCabin() {
 		yaw: tuned.cabinYaw,
 		sink: tuned.cabinSink
 	} );
+
+}
+
+/**
+ * Where the insects may not fly: around the lens, where a sprite one unit away fills a
+ * third of the frame, and the cabin's own footprint, so nothing passes through its walls.
+ * Live references, so a moved camera or a re-placed cabin needs no rebuild — `object` is a
+ * getter because importing a cabin rebuilds its wall mesh.
+ */
+function insectNoFlyZones() {
+
+	return [
+		{ position: cameraRig.basePosition, radius: 2.2 },
+		// margin covers the sprite's own half-width and the wobble the quad adds on top
+		{ get object() { return cabin.wall; }, margin: 0.18 }
+	];
 
 }
 
@@ -2079,16 +2172,66 @@ function bindInput() {
 
 	homeView = snapshotView();
 
+	// Enter Enter K M Enter Enter opens the menu. Nothing on the page hints at it, and the
+	// shortcuts below only answer while the menu is open, so a visitor who presses G does
+	// not get a terrain download and W does not fly them out of the shot.
+	const UNLOCK = [ 'enter', 'enter', 'k', 'm', 'enter', 'enter' ];
+	const recent = [];
+
+	// Space twice in quick succession starts or stops the day / night test, menu or not.
+	const DOUBLE_SPACE = 400; // ms between the two presses
+	let lastSpace = - Infinity;
+
 	window.addEventListener( 'keydown', event => {
 
 		if ( isTypingTarget( event.target ) ) return;
 
 		const key = event.key.toLowerCase();
+
+		if ( key === ' ' ) {
+
+			// No page scroll, and no click on whichever menu control still has focus — that
+			// would toggle the cycle's own checkbox a second time.
+			event.preventDefault();
+			if ( document.activeElement && document.activeElement !== document.body ) document.activeElement.blur();
+
+			if ( ! event.repeat ) {
+
+				if ( event.timeStamp - lastSpace < DOUBLE_SPACE ) {
+
+					lastSpace = - Infinity;
+					setDayNight( ! dayNight.enabled );
+
+				} else {
+
+					lastSpace = event.timeStamp;
+
+				}
+
+			}
+
+		}
+
+		if ( ! event.repeat ) {
+
+			recent.push( key );
+			if ( recent.length > UNLOCK.length ) recent.shift();
+
+			if ( panel && recent.length === UNLOCK.length && recent.every( ( k, i ) => k === UNLOCK[ i ] ) ) {
+
+				recent.length = 0;
+				panel.show();
+				return;
+
+			}
+
+		}
+
+		if ( ! panel || ! panel.visible ) return;
+
 		if ( FLY_KEYS.has( key ) ) flyKeys.add( key );
 
 		if ( key === 'r' ) resetView();                        // back to the framing
-		else if ( key === 'h' ) document.getElementById( 'hud' ).classList.toggle( 'is-visible' );
-		else if ( key === 't' && panel ) panel.toggleVisibility();
 		else if ( key === 'g' ) exportGLB( terrainMesh );       // hand off to Blender
 		else if ( key === 'o' ) exportOBJ( terrainMesh );
 
@@ -2255,16 +2398,41 @@ function animate() {
 
 }
 
+/** Starts or stops the day / night test — from the menu's checkbox or a double Space. */
+function setDayNight( on ) {
+
+	dayNight.enabled = on;
+	tuned.dayNight = on;
+	if ( panel ) panel.set( 'dayNight', on );
+
+}
+
+/** The time-of-day test cycle: off by default, run from the panel's Day / night group. */
+function updateDayNight( dt ) {
+
+	dayNight.update( dt, cameraRig.baseQuaternion );
+
+	uniforms.u_lampWall.value = cabin.lampWorld( uniforms.u_lampPosition.value, uniforms.u_lampNormal.value );
+	cabin.setLampGlow( dayNight.lamp );
+
+	grade.tintOpacity = tuned.tintOpacity * dayNight.tintScale;
+	grade.tintColor.copy( dayNight.tintColor );
+
+	if ( dayNight.enabled && panel && panel.visible ) panel.set( 'dayHour', + dayNight.hour.toFixed( 2 ) );
+
+}
+
 function frame( dt ) {
 
 	uniforms.u_time.value += dt;
 
 	updateKeyboardFly( dt );
 	cameraRig.update( dt );
-	insects.update( dt );
+	insects.update( dt, camera );
+	updateDayNight( dt );
 
-	// The sky sphere is only radius 15 against a far plane of 20, so it rides with the
-	// camera rather than enclosing the world.
+	// The sky sphere is only radius 15, so it rides with the camera rather than enclosing
+	// the world.
 	skyMesh.position.copy( camera.position );
 
 	updateInteractionField();

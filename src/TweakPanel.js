@@ -30,24 +30,21 @@ const STYLE = `
 	pointer-events: auto;
 }
 #tweak.is-hidden { display: none; }
-/* A phone has no T key, and the panel covers the very framing you open it to judge. */
-#tweak-toggle {
-	position: fixed;
-	right: 10px;
-	bottom: 10px;
-	width: 34px;
-	height: 34px;
-	border: 1px solid rgba(234, 246, 247, 0.25);
-	border-radius: 50%;
-	background: rgba(8, 26, 30, 0.55);
-	backdrop-filter: blur(8px);
-	color: rgba(234, 246, 247, 0.75);
-	font-size: 15px;
-	line-height: 1;
-	cursor: pointer;
-	z-index: 31;
-	-webkit-tap-highlight-color: transparent;
-}
+#tweak .tweak-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 12px; }
+#tweak .tweak-head h2 { margin: 0; }
+#tweak .tweak-head button { flex: 0 0 auto; padding: 4px 12px; }
+/* The scene's own HUD, folded in so there is one menu to show and hide. */
+#tweak #hud { position: static; display: block; padding: 0 0 4px; opacity: 1; text-shadow: none; pointer-events: auto; transition: none; }
+#tweak #hud .hud-head h1 { font-size: 10px; letter-spacing: 0.18em; }
+#tweak #hud .hud-head p,
+#tweak #hud .hud-status,
+#tweak #hud .hud-note,
+#tweak #hud .hud-foot { margin: 0 0 10px; max-width: none; font-size: 11px; color: rgba(234,246,247,0.62); }
+#tweak #hud .hud-status { letter-spacing: 0.06em; }
+#tweak #hud .hud-actions { margin: 0 0 10px; }
+#tweak #hud .hud-note { display: block; }
+#tweak #hud .hud-foot { display: flex; flex-direction: column; gap: 2px; }
+#tweak #hud .hud-foot span { display: block; }
 #tweak h2 {
 	margin: 0 0 2px;
 	font-size: 10px;
@@ -153,6 +150,7 @@ export class TweakPanel {
 		this.onCopy = onCopy || ( () => '' );
 		this.values = {};
 		this.outputs = {};
+		this.toggles = {};
 
 		const style = document.createElement( 'style' );
 		style.textContent = STYLE;
@@ -162,35 +160,49 @@ export class TweakPanel {
 		this.root.id = 'tweak';
 		document.body.appendChild( this.root );
 
+		// Hidden until unlocked — the page is the shot, and this is for whoever tunes it.
+		this.root.classList.add( 'is-hidden' );
+
+		const head = document.createElement( 'div' );
+		head.className = 'tweak-head';
+		this.root.appendChild( head );
+
 		const heading = document.createElement( 'h2' );
 		heading.textContent = 'Tweak';
-		this.root.appendChild( heading );
+		head.appendChild( heading );
 
-		const hint = document.createElement( 'p' );
-		hint.className = 'tweak-hint';
-		hint.textContent = 'T hides this panel, or tap the dot.';
-		this.root.appendChild( hint );
+		const hide = document.createElement( 'button' );
+		hide.type = 'button';
+		hide.textContent = 'Hide';
+		hide.title = 'Hide the menu (Enter Enter K M Enter Enter brings it back)';
+		hide.addEventListener( 'click', () => this.hide() );
+		head.appendChild( hide );
 
-		// Tap target as well as the key, so the panel can be dismissed on a phone. Kept out
-		// of `this.root` on purpose — it has to survive the panel being hidden.
-		//
-		// Named `toggleButton`, not `toggle`: this class already has a toggle() *method* for
-		// checkbox rows, and assigning the element over it shadows the method on the instance,
-		// so the first .toggle('freeze', ...) call dies and the whole scene fails to build.
-		this.toggleButton = document.createElement( 'button' );
-		this.toggleButton.id = 'tweak-toggle';
-		this.toggleButton.type = 'button';
-		this.toggleButton.title = 'Show/hide the tweak panel';
-		this.toggleButton.textContent = '⚙';
-		this.toggleButton.addEventListener( 'click', () => this.toggleVisibility() );
-		document.body.appendChild( this.toggleButton );
+	}
 
-		// `?clean` opens straight into the bare shot — the point of loading it on a device.
-		if ( /(^|[?&#])clean/.test( location.search + location.hash ) ) {
+	/** Moves an existing element in under the header, so it shows and hides with the panel. */
+	adopt( element ) {
 
-			this.root.classList.add( 'is-hidden' );
+		this.root.insertBefore( element, this.root.children[ 1 ] || null );
+		return this;
 
-		}
+	}
+
+	get visible() {
+
+		return ! this.root.classList.contains( 'is-hidden' );
+
+	}
+
+	show() {
+
+		this.root.classList.remove( 'is-hidden' );
+
+	}
+
+	hide() {
+
+		this.root.classList.add( 'is-hidden' );
 
 	}
 
@@ -275,6 +287,8 @@ export class TweakPanel {
 		wrap.appendChild( text );
 		this.root.appendChild( wrap );
 
+		this.toggles[ key ] = input;
+
 		return this;
 
 	}
@@ -354,10 +368,12 @@ export class TweakPanel {
 
 	}
 
-	/** Push values back into the sliders — used after a fit or a reset. */
+	/** Push values back into the controls — used after a fit, a reset or a shortcut. */
 	set( key, value ) {
 
 		this.values[ key ] = value;
+		if ( this.toggles[ key ] ) this.toggles[ key ].checked = value;
+
 		const control = this.outputs[ key ];
 		if ( ! control ) return;
 
@@ -461,7 +477,8 @@ export class TweakPanel {
 
 	toggleVisibility() {
 
-		this.root.classList.toggle( 'is-hidden' );
+		if ( this.visible ) this.hide();
+		else this.show();
 
 	}
 
