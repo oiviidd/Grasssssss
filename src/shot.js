@@ -76,6 +76,41 @@ export const SHOT = {
 };
 
 /**
+ * The opening. The page loads with the camera down in the grass looking up into the sky,
+ * where the title is written; after a hold it cranes back and down to SHOT.camera.
+ *
+ * `camera` is a pose like SHOT.camera's, framed in the browser (Reference/shot-tuned ST.js).
+ * The mountain and cabin do not move for it: they are placed for the hero shot, and the
+ * opening is simply the same world seen from closer in and lower down.
+ *
+ * The title is pinned to a point in that opening frame — x and y in NDC (-1..1, +y up),
+ * blended between a wide and a narrow layout like the props — and from then on to the sky
+ * itself, so the camera's tilt carries it up and out of frame.
+ *
+ * hold is how long the title stands before the camera moves, flight how long the move
+ * takes, both in seconds. A click, tap or key during the hold starts the move early.
+ */
+export const INTRO = {
+	camera: {
+		position: [ 0.21, - 0.07, 0.76 ],
+		rotation: [ 0.214, - 0.005, 0 ],
+		fov: 32
+	},
+
+	// Desktop: the open sky to the right of the mountain. Phone: above the summit, where the
+	// narrow frame has the most sky.
+	//
+	// The phone also turns the opening a little left and tilts it up less: straight from the
+	// desktop pose, the cabin's eave cut into the right edge of the narrow frame and the
+	// mountain sat off-centre at the very bottom. Blended by aspect, like the title.
+	wide: { aspect: 1.9, x: 0.36, y: 0.36 },
+	narrow: { aspect: 0.5, x: 0, y: 0.5, rotation: [ 0.17, 0.1, 0 ] },
+
+	hold: 3.6,
+	flight: 4.6
+};
+
+/**
  * Grass tuning, held here rather than buried in Grass.js because it is matched to the
  * reference image and gets re-fitted whenever that changes.
  *
@@ -166,9 +201,12 @@ export const FOG = {
  *   world  — distance and baseY. These are what make it read as *far away*: the parallax
  *            against the camera-locked sky, and how much of it the meadow's ridge hides.
  *            They never change with the viewport.
- *   frame  — anchorX and scale, interpolated between a wide and a narrow layout. fov in
- *            three is vertical, so a portrait phone crops the sides away; a cone pinned to
- *            a world x simply leaves the shot. anchorX is NDC (-1 left edge, +1 right).
+ *   frame  — anchorX, interpolated between a wide and a narrow layout. fov in three is
+ *            vertical, so a portrait phone crops the sides away; a cone pinned to a world x
+ *            simply leaves the shot. anchorX is NDC (-1 left edge, +1 right).
+ *
+ * Its shape never changes with the viewport. Narrow screens make room for it by zooming the
+ * camera out instead — see RESPONSIVE.
  *
  * distance is free up to the camera's far plane (120). The sky sphere is only a backdrop —
  * it writes no depth — so the cone can stand well behind the meadow rather than sinking
@@ -177,10 +215,9 @@ export const FOG = {
 export const MOUNTAIN = {
 	distance: 26.6,
 
-	// The *summit* height, not the base. Shrinking the cone for a narrow viewport used to
-	// drop its peak below the meadow's ridge and hide it completely; pinning the summit
-	// means scale only narrows the silhouette, and the peak clears the grass by the same
-	// margin on every screen. The base goes wherever it must — the meadow covers it.
+	// The *summit* height, not the base: the peak clears the grass by the same margin
+	// whatever cone an artist has imported and at whatever modelScale. The base goes wherever
+	// it must — the meadow covers it.
 	summitY: 5.25,
 
 	// Tuned in the browser for the artist's model, assets/models/mountain_custom.glb, which
@@ -196,17 +233,14 @@ export const MOUNTAIN = {
 	baseMist: 0.2,
 	baseMistHeight: 0.52,
 
-	// Framing per viewport shape. anchorX is NDC; width/height scale the cone.
+	// Where the cone's centre sits across the frame, per viewport shape. anchorX is NDC.
 	//
-	// They are separate on purpose. A narrow viewport needs a narrower cone or it fills the
-	// frame edge to edge — but shrinking it *uniformly* drops the summit behind the meadow's
-	// ridge, and occlusion does not care about fov, so no amount of reframing brings it back.
-	// Squeezing only the width keeps the peak exactly where it was and the base safely
-	// hidden; the cone simply reads as a steeper volcano on a phone.
+	// The narrow layout used to squeeze the cone's width as well, to 46% on a phone, and it
+	// read as a much sharper peak there than on a desktop. It keeps its own shape now.
 	//
 	// The reference frames the cone's centre 23% across a 2:1 image, i.e. NDC -0.54.
-	wide: { aspect: 1.9, anchorX: - 0.54, width: 1, height: 1 },
-	narrow: { aspect: 0.5, anchorX: - 0.34, width: 0.46, height: 0.94 }
+	wide: { aspect: 1.9, anchorX: - 0.54 },
+	narrow: { aspect: 0.5, anchorX: - 0.34 }
 };
 
 /**
@@ -274,9 +308,16 @@ export const CABIN = {
 	lampWall: 0.11,
 
 	// The emblem on the door: same paint as the door, so it needs a little help to read.
-	// emblemShadow is how dark its soft drop shadow on the door gets (0 = none), emblemRelief
-	// how strongly its edges catch the light (0 = flat, as baked).
-	emblemShadow: 0.45,
+	// emblemContact is the dark line where it meets the door, emblemShadow the faint soft
+	// shadow it drops down and to the right, emblemShadowOffset how far (model units), and
+	// emblemRelief how strongly its edges catch the light. 0 turns each off.
+	//
+	// The contact line carries it. A wide shadow pushed 1.4 cm out (0.45 at [0.008, -0.012])
+	// made it read as a plaque floating off the door; a piece of wood this thin throws only a
+	// short shadow, and what says "attached" is the dark seam where it meets the panel.
+	emblemContact: 0.6,
+	emblemShadow: 0.18,
+	emblemShadowOffset: [ 0.004, - 0.006 ],
 	emblemRelief: 1,
 
 	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
@@ -323,17 +364,27 @@ export const CABIN_BLOCKOUT = {
 };
 
 /**
- * Framing on viewports that are not the hero shot's shape.
+ * Camera zoom on viewports that are not the hero shot's shape.
  *
  * fov in three is vertical, so a narrow viewport does not zoom out — it crops the sides.
  * At 30 degrees vertical a portrait phone (aspect 0.46) sees only 14 degrees horizontally,
  * which is not enough room for the mountain, the title and the cabin door at once.
- * Widening the vertical fov buys that room back; the cost is more grass and sky above and
- * below than the hero framing was tuned for, so it is held to the minimum that works.
+ *
+ * zoom 1 is the hero framing; 0.5 sees twice as much. It is set at three viewport shapes —
+ * phone, tablet (both portrait) and desktop, where it is always 1 — and blended between
+ * them by aspect. Narrower than the phone, it keeps zooming out so the phone's horizontal
+ * view still fits.
+ *
+ * The zoom keeps the bottom edge of the frame where the hero shot has it and opens the
+ * extra room above, into the sky. Zooming about the centre showed the underside of the
+ * meadow's near edge, as a strip of sky below the grass.
  */
 export const RESPONSIVE = {
-	minHorizontalFov: 22,
-	maxFov: 46
+	phoneAspect: 0.46,
+	phoneZoom: 0.64,
+	tabletAspect: 0.75,
+	tabletZoom: 0.8,
+	desktopAspect: 1.9
 };
 
 /**

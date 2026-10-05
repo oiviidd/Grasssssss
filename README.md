@@ -15,14 +15,18 @@ from the filesystem will fail on ES modules and `fetch`.
 
 | input | |
 |---|---|
-| drag | look around |
-| scroll | dolly |
 | move cursor | part the grass |
-| `Enter` `Enter` `K` `M` `Enter` `Enter` | open the menu (hidden by default; its *Hide* button closes it) |
-| `Space` `Space` | start / stop the day / night test — works with the menu closed |
-| `G` / `O` | export the hill as .glb / .obj — menu open only |
-| `R` | reset the framing — menu open only |
-| `W A S D Q E` | fly — menu open only |
+| click / tap an insect | it bolts |
+| `Space` `Space` | run / stop the day–night clock |
+| `Enter` `Enter` `K` `M` `Enter` `Enter` | unlock and open the menu (hidden by default; its *Hide* button closes it) |
+| middle-drag (shift: pan, ctrl: dolly) | orbit — once unlocked |
+| scroll | dolly — once unlocked |
+| `W A S D Q E` | fly — once unlocked |
+| `R` | reset the framing — once unlocked |
+| `G` / `O` | export the hill as .glb / .obj — once unlocked |
+
+Until the menu has been unlocked nothing moves the camera, so a visitor who scrolls or
+presses a key stays in the shot.
 
 ---
 
@@ -215,8 +219,9 @@ src/
   Scatter.js         jittered-grid scatter + orient-to-normal
   Grass.js           instanced blades + re-seated sculpted tufts
   Flowers.js         instanced billboards over the 5-cell atlas
-  Insects.js         sprite-sheet bee / dragonfly / fly
+  Insects.js         sprite-sheet bee / dragonfly / fly: manoeuvres, and bolting when tapped
   DayNight.js        test-only day / night loop: sky tint, sun glow, moon, door lantern
+  Intro.js           the opening: "Welcome to Kazmos" in the sky, then the crane down to the shot
   TerrainIO.js       .glb / .obj export, custom-hill import
   CameraRig.js       mouse-look about a pivot, free look, handheld shake
   Postprocessing.js  bloom + final grade
@@ -224,7 +229,8 @@ src/
   glsl/              the extracted shaders
 assets/_original/    original assets this study no longer loads (see its README)
 tools/fit-hill.mjs   fits hill + camera to Reference/ by skyline matching
-Reference/           the target photograph
+tools/optimize-props.mjs  slims an artist's cabin / mountain hand-off (see below)
+Reference/           the target photograph; models-original/ holds the props as delivered
 ```
 
 `window.grassStudy` is exposed for poking at things: `step(dt)` drives one frame by
@@ -243,18 +249,52 @@ parameters.
   `src/Flowers.js`. The counts are *ceilings*: slope/patch/rim rejection discards most
   candidates, so ask for roughly 2.5× what you want. The defaults give ~108k blades,
   1386 tufts and ~470 flowers.
+- **The opening** — `INTRO` in `src/shot.js`. The page loads with the camera down in the
+  grass looking up (the pose framed in `Reference/shot-tuned ST.js`), "Welcome to Kazmos"
+  reveals in the sky, and after `hold` seconds the camera cranes back to `SHOT.camera`
+  over `flight` seconds. `wide` / `narrow` place the title in that frame (NDC) on a desktop
+  and a phone, and the phone turns the opening slightly so the cabin stays out of it. A
+  click, tap or key starts the move early; the menu's *Intro* group replays it. The
+  reveal itself is CSS, under *intro title* in `style.css`.
 - **The look** — `SHOT.grade` in `src/shot.js`. `tintColorHex` and `tintOpacity` move
   the image furthest; `bloomThreshold` decides how much of the grass blooms.
-- **Day / night** — a test rig, off by default: a quick double `Space` starts and stops
-  it from anywhere, and the menu's *Day / night (test)* group does the same, sets its
-  speed (in game hours per second, up to a whole day a second) and scrubs the hour. The
-  palette for each sun height is `KEYS` in `src/DayNight.js`. At dusk the insects fly off
-  out of frame and come back after sunrise, and the moon rises from behind the cabin.
-  The lantern's spot on the cabin model is `CABIN.lampPosition` in `src/shot.js`.
-  Switching it off puts every value back to the daylight shot.
-- **The emblem on the door** — `CABIN.emblemShadow` and `CABIN.emblemRelief` in
-  `src/shot.js`: its soft drop shadow on the door and how strongly its edges catch the
-  light. It keeps the door's own paint either way.
+- **Day / night** — the page opens at the real light over Mount Damavand at that moment
+  (the sun's actual elevation, worked out for the date, so Tehran's seasons are right) and
+  holds it. A quick double `Space` sets the clock running through whole days, fast, and
+  another stops it where it is; the menu's *Day / night (test)* group does the same, sets
+  its speed (in game hours per second, up to a whole day a second) and scrubs the hour.
+  The palette for each sun height is `KEYS` in `src/DayNight.js`. At dusk the insects fly
+  off out of frame and come back after sunrise — opened at night, they are already gone —
+  and the moon rises from behind the cabin. The lantern's spot on the cabin model is
+  `CABIN.lampPosition` in `src/shot.js`. In full day every value is neutral, so the frame
+  is the tuned daylight shot.
+- **Phones and tablets** — `RESPONSIVE` in `src/shot.js`, live in the menu's
+  *Responsive* group: *phone zoom* and *tablet zoom*, where 1 is the desktop framing and
+  lower sees more. It zooms the camera out rather than reshaping anything — the mountain
+  keeps the same silhouette on every screen — and the extra room opens into the sky, so
+  the meadow still fills the bottom of the frame.
+- **Insects** — `FLIGHT` in `src/Insects.js`, one entry per species: range, heights,
+  speed, and `moves`, how often it picks each manoeuvre (hover, cruise, dart, zigzag,
+  orbit, figure-eight, dipping to rest on the flowers). Where they live is `INSECTS` in
+  `src/shot.js`. A click or tap on one makes it flinch and bolt away from the finger;
+  `flee` is how much faster than its cruise it goes.
+- **A new cabin or mountain from the artist** — run it through
+  `tools/optimize-props.mjs` before it goes into `assets/models/` (setup and the numbers
+  are at the top of the script). Blender's export carries every texture twice, the meshes
+  far denser than the shot can show, and the mountain's map at 8K; the script also cuts
+  big meshes into slabs so Draco decodes them on several workers at once. The delivered
+  cabin and mountain went from 14.6 MB to 6.5 MB and decode in about a second instead of
+  over two, with the hero shot unchanged to within a few dozen pixels.
+- **Load order** — the page builds the hill, grass, flowers and insects while the cabin
+  and mountain are still decoding (`buildWorld`, then `buildProps` in `src/main.js`), and
+  decodes its textures off the main thread. On a desktop it reaches its first frame in
+  about 2.5 s from a local server, down from about 5.5 s.
+- **The emblem on the door** — `CABIN.emblemContact`, `emblemShadow`,
+  `emblemShadowOffset` and `emblemRelief` in `src/shot.js`: the dark seam where it meets
+  the door, the faint short shadow it drops, how far that shadow falls, and how strongly
+  its edges catch the light. Keep the shadow short and let the contact line do the work —
+  a wide offset shadow makes it look like it floats off the door. It keeps the door's own
+  paint either way.
 
 ---
 

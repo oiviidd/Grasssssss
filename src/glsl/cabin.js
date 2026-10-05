@@ -57,14 +57,20 @@ uniform float u_alphaTest;
 uniform float u_lodBias;
 
 // The emblem on the door is a real relief, but barely a centimetre proud and baked in the
-// door's own paint, so drawn unlit it melts into the wood. Two touches lift it without
+// door's own paint, so drawn unlit it melts into the wood. Three touches lift it without
 // changing its colour: its edges catch or lose a light from the upper left (u_detailRelief),
-// and it drops a small soft shadow down and to the right onto the door (u_detailShadow).
+// a tight dark line runs where it meets the door (u_detailContact), and a faint short shadow
+// falls down and to the right of it (u_detailShadow, offset by u_detailOffset).
+//
+// The contact line is what keeps it on the door. A wide soft shadow on its own, offset
+// further than a centimetre of wood could throw it, read as a plaque floating off the panel.
+//
 // u_detailMask is its silhouette, blurred, baked once at import over u_detailRect (model xy:
-// min, size); u_detailDepth.x is the z of the surface it sits on. Both strengths default to
+// min, size); u_detailDepth.x is the z of the surface it sits on. Every strength defaults to
 // 0, which leaves every other piece of the cabin untouched.
 uniform float u_detailRelief;
 uniform float u_detailShadow;
+uniform float u_detailContact;
 uniform sampler2D u_detailMask;
 uniform vec4 u_detailRect;
 uniform vec2 u_detailDepth;
@@ -95,12 +101,19 @@ float detailShade() {
 		return 1.0 + u_detailRelief * (side * dot(n.xy, light) * 0.55 + (1.0 - side) * 0.05);
 	}
 
-	if (u_detailShadow <= 0.0 || n.z < 0.5) return 1.0;
+	if (u_detailShadow + u_detailContact <= 0.0 || n.z < 0.5) return 1.0;
 
 	// Only on the plane it sits on, not on anything further out in the same rectangle.
 	float onPlane = 1.0 - smoothstep(0.006, 0.02, abs(v_local.z - u_detailDepth.x));
-	float shadow = max(detailMask(u_detailOffset), detailMask(vec2(0.0)) * 0.45);
-	return 1.0 - u_detailShadow * shadow * onPlane;
+
+	// The contact: a tight dark line right where the piece meets the door, barely nudged
+	// from it. The blurred mask is 0.5 at the silhouette and fades over a few millimetres
+	// outside it; keeping only its top half keeps the shadow hugging the edge.
+	float contact = smoothstep(0.1, 0.5, detailMask(u_detailOffset * 0.2));
+	float dropped = max(detailMask(u_detailOffset), detailMask(vec2(0.0)) * 0.45);
+
+	float shadow = max(contact * u_detailContact, dropped * u_detailShadow);
+	return 1.0 - shadow * onPlane;
 }
 
 void main () {

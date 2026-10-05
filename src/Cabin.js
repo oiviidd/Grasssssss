@@ -46,6 +46,13 @@ function texture( data, width, height ) {
 
 }
 
+/** One white texel, for a piece that is never drawn but still needs a material. */
+function blankMap() {
+
+	return texture( new Uint8Array( [ 255, 255, 255, 255 ] ), 1, 1 );
+
+}
+
 /* ── wall ──────────────────────────────────────────────────────────────────── */
 
 /**
@@ -278,8 +285,9 @@ export function bakeCabinLampMap( {
  * emblem on its door — with a `detail` attribute, and measures them for the shadow.
  *
  * The importer merges every object into one geometry, so they are told apart by the part
- * ranges it reports: the largest part is the building, every other part a detail. Call
- * after the geometry has been seated, since the measurements are in its final space.
+ * ranges it reports: the largest part and anything in its paint is the building, every
+ * other part a detail. Call after the geometry has been seated, since the measurements are
+ * in its final space.
  *
  * Returns null when there is nothing to mark. The shadow is only measured for details that
  * lie flat on a wall facing +z, the way the emblem sits on the door; anything else keeps
@@ -289,7 +297,11 @@ export function markDetails( geometry, parts ) {
 
 	if ( ! parts || parts.length < 2 || ! geometry.index ) return null;
 
-	const body = parts.reduce( ( best, part, i ) => part.vertices > parts[ best ].vertices ? i : best, 0 );
+	// The building is the largest part and every other part in the same paint — the body is
+	// shipped in pieces so it decodes in parallel (tools/optimize-props.mjs).
+	const largest = parts.reduce( ( best, part, i ) => part.vertices > parts[ best ].vertices ? i : best, 0 );
+	const isBody = ( part, i ) => i === largest || ( part.paint && part.paint === parts[ largest ].paint );
+	if ( parts.every( isBody ) ) return null;
 
 	const count = geometry.attributes.position.count;
 	const flags = new Float32Array( count );
@@ -303,7 +315,7 @@ export function markDetails( geometry, parts ) {
 
 	parts.forEach( ( part, i ) => {
 
-		if ( i !== body ) {
+		if ( ! isBody( part, i ) ) {
 
 			flags.fill( 1, vertex, vertex + part.vertices );
 
@@ -380,31 +392,36 @@ export function bakeDetailShadow( renderer, geometry, detail, { size = 256, blur
 	silhouette.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( 3 ), 3 ) );
 	silhouette.dispose();
 
-	// Three box passes each way come close enough to a Gaussian for a shadow.
+	// Three box passes each way come close enough to a Gaussian for a shadow. Each pass is a
+	// running sum — one pixel in, one out, as the window slides — so its cost does not grow
+	// with the radius; summing the whole window afresh per pixel took a tenth of a second of
+	// the page load. Edges clamp, as before.
 	let value = new Float32Array( size * size );
 	for ( let i = 0; i < value.length; i ++ ) value[ i ] = pixels[ i * 4 ] / 255;
 
 	let scratch = new Float32Array( size * size );
+	const width = blur * 2 + 1;
+	const last = size - 1;
 
 	for ( let pass = 0; pass < 3; pass ++ ) {
 
-		for ( const [ dx, dy ] of [ [ 1, 0 ], [ 0, 1 ] ] ) {
+		for ( const horizontal of [ true, false ] ) {
 
-			for ( let py = 0; py < size; py ++ ) {
+			// stride between neighbours along a line, and between the starts of two lines
+			const step = horizontal ? 1 : size;
+			const next = horizontal ? size : 1;
 
-				for ( let px = 0; px < size; px ++ ) {
+			for ( let line = 0; line < size; line ++ ) {
 
-					let sum = 0;
+				const start = line * next;
+				let sum = 0;
 
-					for ( let k = - blur; k <= blur; k ++ ) {
+				for ( let k = - blur; k <= blur; k ++ ) sum += value[ start + Math.min( last, Math.max( 0, k ) ) * step ];
 
-						const sx = Math.min( size - 1, Math.max( 0, px + k * dx ) );
-						const sy = Math.min( size - 1, Math.max( 0, py + k * dy ) );
-						sum += value[ sy * size + sx ];
+				for ( let p = 0; p < size; p ++ ) {
 
-					}
-
-					scratch[ py * size + px ] = sum / ( blur * 2 + 1 );
+					scratch[ start + p * step ] = sum / width;
+					sum += value[ start + Math.min( last, p + blur + 1 ) * step ] - value[ start + Math.max( 0, p - blur ) * step ];
 
 				}
 
@@ -541,6 +558,7 @@ export class Cabin {
 				u_lodBias: { value: - 0.5 },
 				u_detailRelief: { value: 0 },
 				u_detailShadow: { value: 0 },
+				u_detailContact: { value: 0 },
 				u_detailMask: { value: null },
 				u_detailRect: { value: new THREE.Vector4( 0, 0, 1, 1 ) },
 				u_detailDepth: { value: new THREE.Vector2() },
@@ -593,11 +611,12 @@ export class Cabin {
 
 			const u = this.wall.material.uniforms;
 			u.u_detailRelief.value = options.detailRelief !== undefined ? options.detailRelief : 1;
-			u.u_detailShadow.value = options.detailShadow !== undefined ? options.detailShadow : 0.5;
+			u.u_detailShadow.value = options.detailShadow !== undefined ? options.detailShadow : 0.18;
+			u.u_detailContact.value = options.detailContact !== undefined ? options.detailContact : 0.6;
 			u.u_detailMask.value = detail.mask;
 			u.u_detailRect.value.copy( detail.rect );
 			u.u_detailDepth.value.copy( detail.depth );
-			u.u_detailOffset.value.fromArray( options.detailShadowOffset || [ 0.008, - 0.012 ] );
+			u.u_detailOffset.value.fromArray( options.detailShadowOffset || [ 0.004, - 0.006 ] );
 
 		}
 
@@ -630,10 +649,15 @@ export class Cabin {
 
 		/* the door ------------------------------------------------------------- */
 
-		const doorMap = options.doorMap || bakeCabinDoorMap( options );
+		// On an imported cabin the generated door, lamp and eave are hidden (see the end of
+		// build), so painting their maps is wasted work — the door's alone took half a second
+		// of the page load. They get a blank stand-in instead.
+		const importedDoor = options.doorGeometry || null;
+		const hidden = !! importedWall;
+
+		const doorMap = options.doorMap || ( hidden && ! importedDoor ? blankMap() : bakeCabinDoorMap( options ) );
 		if ( ! options.doorMap ) this.maps.push( doorMap );
 
-		const importedDoor = options.doorGeometry || null;
 		const doorGeometry = importedDoor || new THREE.PlaneBufferGeometry( doorWidth, doorHeight );
 		if ( ! importedDoor ) this.owned.add( doorGeometry );
 
@@ -654,7 +678,7 @@ export class Cabin {
 
 		if ( options.lamp !== false ) {
 
-			const lampMap = bakeCabinLampMap( options );
+			const lampMap = hidden ? blankMap() : bakeCabinLampMap( options );
 			this.maps.push( lampMap );
 
 			const lampHeight = options.lampSize !== undefined ? options.lampSize : 0.46;

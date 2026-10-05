@@ -37,9 +37,10 @@ import { exportGLB, exportOBJ, loadCustomTerrain } from './TerrainIO.js';
 import { Mountain, createMountainGeometry, bakeMountainMap } from './Mountain.js';
 import { Cabin, markDetails, bakeDetailShadow } from './Cabin.js';
 import { DayNight } from './DayNight.js';
-import { SHOT, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
+import { Intro, waitForTitleFonts } from './Intro.js';
+import { SHOT, INTRO, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
-import { pickFile, parseGLB, parseGLBWithMap, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
+import { pickFile, parseGLB, parseGLBWithMap, preloadDecoder, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
 
 // The fog/sky chunk is shared by ShaderMaterial and RawShaderMaterial alike — three
 // resolves #include for both.
@@ -235,30 +236,76 @@ let usingCustomTerrain = false;
 
 const textureLoader = new THREE.TextureLoader();
 
-function loadTexture( file, options ) {
+/**
+ * Whether images can be decoded off the main thread, with their options honoured. Safari
+ * before 17 and Firefox before 98 take createImageBitmap but ignore or mishandle the flip
+ * and alpha options, so they keep the plain <img> route.
+ */
+const DECODE_OFF_THREAD = typeof createImageBitmap === 'function' && ( () => {
+
+	const ua = navigator.userAgent;
+	const safari = /^((?!chrome|android).)*safari/i.test( ua ) ? parseInt( ( ua.match( /Version\/(\d+)/ ) || [] )[ 1 ], 10 ) : null;
+	const firefox = ua.indexOf( 'Firefox' ) > - 1 ? parseInt( ( ua.match( /Firefox\/(\d+)/ ) || [] )[ 1 ], 10 ) : null;
+	return ! ( safari !== null && safari < 17 ) && ! ( firefox !== null && firefox < 98 );
+
+} )();
+
+/**
+ * One of the scene's textures, decoded as an ImageBitmap where the browser can.
+ *
+ * An <img> is decoded on the main thread the first time it is drawn, which put the 4K sky
+ * — half a second of it — into the very first frame. createImageBitmap decodes in the
+ * background while the rest loads. The flip and the straight (unpremultiplied) alpha that
+ * WebGL would otherwise apply at upload are done at decode instead; the result was checked
+ * texel for texel against the <img> route on every texture loaded here.
+ */
+async function loadTexture( file, options ) {
 
 	const { flipY = true, wrap = null, minFilter = null } = options || {};
 
-	return new Promise( ( resolve, reject ) => {
+	let texture;
 
-		const texture = textureLoader.load( TEXTURE_PATH + file, () => resolve( texture ), undefined, reject );
+	if ( DECODE_OFF_THREAD ) {
 
-		texture.flipY = flipY;
-		if ( wrap ) texture.wrapS = texture.wrapT = wrap;
+		const response = await fetch( TEXTURE_PATH + file );
+		if ( ! response.ok ) throw new Error( TEXTURE_PATH + file + ' → ' + response.status );
 
-		if ( minFilter ) {
+		const image = await createImageBitmap( await response.blob(),
+			Object.assign( { premultiplyAlpha: 'none' }, flipY ? { imageOrientation: 'flipY' } : {} ) );
 
-			texture.minFilter = minFilter;
-			texture.generateMipmaps = false;
+		texture = new THREE.Texture( image );
+		texture.flipY = false; // already applied
+		// so an export can turn the picture back the right way up (r122 textures have no
+		// userData of their own)
+		texture.userData = Object.assign( texture.userData || {}, { flippedAtDecode: flipY } );
+		texture.needsUpdate = true;
 
-		} else {
+	} else {
 
-			texture.minFilter = THREE.LinearMipMapLinearFilter;
-			texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+		texture = await new Promise( ( resolve, reject ) => {
 
-		}
+			const t = textureLoader.load( TEXTURE_PATH + file, () => resolve( t ), undefined, reject );
+			t.flipY = flipY;
 
-	} );
+		} );
+
+	}
+
+	if ( wrap ) texture.wrapS = texture.wrapT = wrap;
+
+	if ( minFilter ) {
+
+		texture.minFilter = minFilter;
+		texture.generateMipmaps = false;
+
+	} else {
+
+		texture.minFilter = THREE.LinearMipMapLinearFilter;
+		texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+	}
+
+	return texture;
 
 }
 
@@ -266,7 +313,9 @@ const grass = new Grass( uniforms );
 const flowers = new Flowers( uniforms );
 const mountain = new Mountain( uniforms );
 const cabin = new Cabin( uniforms );
-const dayNight = new DayNight( uniforms, { tintHex: SHOT.grade.tintColorHex } );
+// Opens at the light over Damavand at this moment, Iran time, and holds it there.
+const dayNight = new DayNight( uniforms, { tintHex: SHOT.grade.tintColorHex } ).syncToSun( new Date() );
+const intro = new Intro( document.getElementById( 'intro' ), INTRO );
 
 /**
  * An optional hand-off: null when the file is not there, the parsed prop when it is.
@@ -307,25 +356,47 @@ const jobs = [
 	[ 'customTerrain', () => loadCustomTerrain( CUSTOM_TERRAIN ).catch( () => null ) ],
 	// the artist's mountain and cabin, each null when not dropped in
 	[ 'customMountain', () => loadOptionalProp( CUSTOM_MOUNTAIN ) ],
-	[ 'customCabin', () => loadOptionalProp( CUSTOM_CABIN ) ]
+	[ 'customCabin', () => loadOptionalProp( CUSTOM_CABIN ) ],
+	// the opening title's typefaces, so it never reveals in a fallback and swaps mid-way
+	[ 'fonts', () => waitForTitleFonts() ]
 ];
 
 let completed = 0;
 
-Promise.all( jobs.map( ( [ key, run ] ) => run().then( value => {
+// The Draco decoder is warmed up while the models download, so their meshes are in the
+// workers the moment they land.
+preloadDecoder().catch( error => console.warn( 'Draco decoder preload failed', error ) );
 
-	completed ++;
-	loaderBarEl.style.transform = 'scaleX(' + ( completed / jobs.length ) + ')';
-	return [ key, value ];
+const loading = {};
 
-} ) ) )
-	.then( entries => {
+for ( const [ key, run ] of jobs ) {
 
-		const assets = {};
-		entries.forEach( ( [ key, value ] ) => { assets[ key ] = value; } );
-		build( assets );
+	loading[ key ] = run().then( value => {
 
-	} )
+		completed ++;
+		loaderBarEl.style.transform = 'scaleX(' + ( completed / jobs.length ) + ')';
+		return value;
+
+	} );
+
+}
+
+/** The named jobs' results, as one { key: value } once they have all come in. */
+function gather( keys ) {
+
+	return Promise.all( keys.map( key => loading[ key ] ) )
+		.then( values => Object.fromEntries( keys.map( ( key, i ) => [ key, values[ i ] ] ) ) );
+
+}
+
+// The mountain and the cabin are the slow part — their meshes decode for a second in Draco's
+// workers — and nothing else waits on them. So the rest of the world is built on the main
+// thread while they decode, instead of after; the page appears no differently, just sooner.
+const PROPS = [ 'customMountain', 'customCabin', 'fonts' ];
+
+gather( jobs.map( ( [ key ] ) => key ).filter( key => ! PROPS.includes( key ) ) )
+	.then( assets => buildWorld( assets ).then( () => gather( PROPS ) ).then( props => Object.assign( assets, props ) ) )
+	.then( assets => buildProps( assets ) )
 	.catch( error => {
 
 		console.error( error );
@@ -335,7 +406,17 @@ Promise.all( jobs.map( ( [ key, run ] ) => run().then( value => {
 
 /* ── scene construction ────────────────────────────────────────────────────── */
 
-function build( assets ) {
+/**
+ * Lets queued work run before the next long step. The models' loader needs a few short turns
+ * on the main thread to hand their meshes to the decoder; a half-second terrain bake that
+ * started first used to hold them back until it was done, and the decode then began late.
+ */
+const nextTask = () => new Promise( resolve => setTimeout( resolve, 0 ) );
+
+/** Everything but the mountain and the cabin: sky, hill, grass, flowers, insects. */
+async function buildWorld( assets ) {
+
+	await nextTask();
 
 	uniforms.u_envTexture.value = assets.sky;
 	uniforms.u_terrainRocksTexture.value = assets.rocksGround;
@@ -351,6 +432,8 @@ function build( assets ) {
 	// expressed in stage space.
 	deriveStage();
 	if ( usingCustomTerrain ) deriveScatterExtent();
+
+	await nextTask();
 
 	// Bake the maps the original shipped as painted textures. They have to be generated
 	// rather than reused: grass.jpg has the river channel stained into it, and the AO /
@@ -403,7 +486,74 @@ function build( assets ) {
 	skyMesh.renderOrder = - 2000;
 	scene.add( skyMesh );
 
-	/* the mountain ------------------------------------------------------------ */
+	/* ground ------------------------------------------------------------------ */
+
+	terrainMesh = new THREE.Mesh( hillGeometry, new THREE.ShaderMaterial( {
+		uniforms: {
+			u_envTexture: uniforms.u_envTexture,
+			u_fogBox: uniforms.u_fogBox,
+			u_fogCentre: uniforms.u_fogCentre,
+			u_fogRadius: uniforms.u_fogRadius,
+			u_fogStart: uniforms.u_fogStart,
+			u_fogRange: uniforms.u_fogRange,
+			u_hazeStart: uniforms.u_hazeStart,
+			u_hazeRange: uniforms.u_hazeRange,
+			u_hazeAmount: uniforms.u_hazeAmount,
+			...dayNightUniforms( uniforms ),
+			u_terrainInfoTexture: uniforms.u_terrainInfoTexture,
+			u_terrainGrassTexture: uniforms.u_terrainGrassTexture,
+			u_terrainRocksTexture: uniforms.u_terrainRocksTexture,
+			u_terrainAOTexture: uniforms.u_terrainAOTexture,
+			u_stageCentre: uniforms.u_stageCentre,
+			u_stageSize: uniforms.u_stageSize
+		},
+		vertexShader: terrainVert,
+		fragmentShader: terrainFrag
+	} ) );
+	terrainMesh.material.extensions.derivatives = true;
+	terrainMesh.renderOrder = - 1000;
+	scene.add( terrainMesh );
+
+	/* grass, flowers, insects ------------------------------------------------- */
+
+	await nextTask();
+
+	grass.build( surface, {
+		rimRadius,
+		rimFade,
+		maxSlope,
+		bounds: scatterArea(),
+		bladeCount: GRASS.bladeCount,
+		bladeWidthScale: GRASS.bladeWidthScale,
+		bladeHeightScale: GRASS.bladeHeightScale,
+		tuftInstances: GRASS.tuftInstances,
+		tuftScale: GRASS.tuftScale
+	} );
+	scene.add( grass.container );
+
+	flowers.build( surface, assets.flowers, {
+		rimRadius,
+		rimFade,
+		maxSlope,
+		bounds: scatterArea(),
+		flowerCount: GRASS.flowerCount,
+		flowerScale: GRASS.flowerScale
+	} );
+	scene.add( flowers.container );
+
+	insects.build( surface, INSECTS, { avoid: insectNoFlyZones() } );
+	scene.add( insects.container );
+
+	// Opened after dusk, the day's insects are already gone for the night.
+	dayNight.update( 0, heroView() );
+	insects.setPresent( dayNight.insectsOut, { immediate: true } );
+
+}
+
+/** The mountain and the cabin, once they have decoded — then the page starts. */
+function buildProps( assets ) {
+
+	/* the mountain and the cabin ---------------------------------------------- */
 
 	// The artist's hand-offs, when present, replace the blockouts before anything is built.
 	// Adopted as they are: exposure, scale and framing come from the config — the values the
@@ -435,64 +585,6 @@ function build( assets ) {
 	buildMountain();
 	scene.add( mountain.container );
 
-	/* ground ------------------------------------------------------------------ */
-
-	terrainMesh = new THREE.Mesh( hillGeometry, new THREE.ShaderMaterial( {
-		uniforms: {
-			u_envTexture: uniforms.u_envTexture,
-			u_fogBox: uniforms.u_fogBox,
-			u_fogCentre: uniforms.u_fogCentre,
-			u_fogRadius: uniforms.u_fogRadius,
-			u_fogStart: uniforms.u_fogStart,
-			u_fogRange: uniforms.u_fogRange,
-			u_hazeStart: uniforms.u_hazeStart,
-			u_hazeRange: uniforms.u_hazeRange,
-			u_hazeAmount: uniforms.u_hazeAmount,
-			...dayNightUniforms( uniforms ),
-			u_terrainInfoTexture: uniforms.u_terrainInfoTexture,
-			u_terrainGrassTexture: uniforms.u_terrainGrassTexture,
-			u_terrainRocksTexture: uniforms.u_terrainRocksTexture,
-			u_terrainAOTexture: uniforms.u_terrainAOTexture,
-			u_stageCentre: uniforms.u_stageCentre,
-			u_stageSize: uniforms.u_stageSize
-		},
-		vertexShader: terrainVert,
-		fragmentShader: terrainFrag
-	} ) );
-	terrainMesh.material.extensions.derivatives = true;
-	terrainMesh.renderOrder = - 1000;
-	scene.add( terrainMesh );
-
-	/* grass, flowers, insects ------------------------------------------------- */
-
-	grass.build( surface, {
-		rimRadius,
-		rimFade,
-		maxSlope,
-		bounds: scatterArea(),
-		bladeCount: GRASS.bladeCount,
-		bladeWidthScale: GRASS.bladeWidthScale,
-		bladeHeightScale: GRASS.bladeHeightScale,
-		tuftInstances: GRASS.tuftInstances,
-		tuftScale: GRASS.tuftScale
-	} );
-	scene.add( grass.container );
-
-	flowers.build( surface, assets.flowers, {
-		rimRadius,
-		rimFade,
-		maxSlope,
-		bounds: scatterArea(),
-		flowerCount: GRASS.flowerCount,
-		flowerScale: GRASS.flowerScale
-	} );
-	scene.add( flowers.container );
-
-	insects.build( surface, INSECTS, { avoid: insectNoFlyZones() } );
-	scene.add( insects.container );
-
-	/* the cabin --------------------------------------------------------------- */
-
 	buildCabin();
 	scene.add( cabin.container );
 
@@ -505,6 +597,9 @@ function build( assets ) {
 	buildTweakPanel( assets.flowers );
 
 	updateStatus();
+
+	// Before the first frame, so the page never flashes the hero shot first.
+	intro.start();
 
 	loaderEl.classList.add( 'is-hidden' );
 
@@ -533,6 +628,7 @@ function build( assets ) {
 		get cabin() { return cabin; },
 		tuned,
 		dayNight,
+		intro,
 		exportGLB: () => exportGLB( terrainMesh ),
 		exportOBJ: () => exportOBJ( terrainMesh ),
 
@@ -670,8 +766,8 @@ const tuned = {
 	mountainExposure: MOUNTAIN.exposure,
 	mountainHaze: MOUNTAIN.haze,
 
-	minHFov: RESPONSIVE.minHorizontalFov,
-	maxFov: RESPONSIVE.maxFov,
+	phoneZoom: RESPONSIVE.phoneZoom,
+	tabletZoom: RESPONSIVE.tabletZoom,
 
 	fogCentreX: FOG.centre[ 0 ],
 	fogCentreZ: FOG.centre[ 1 ],
@@ -748,20 +844,16 @@ function scheduleRebuild( what ) {
 
 function applyTunedCamera() {
 
+	// Anything that sets the camera outright ends the opening where it stands.
+	intro.finish();
+
 	cameraRig.setAnchor( {
 		position: [ tuned.posX, tuned.posY, tuned.posZ ],
 		rotation: [ tuned.pitch, tuned.yaw, 0 ],
 		cameraDistance: SHOT.camera.cameraDistance
 	} );
 
-	const fov = fovForAspect( camera.aspect );
-
-	if ( camera.fov !== fov ) {
-
-		camera.fov = fov;
-		camera.updateProjectionMatrix();
-
-	}
+	applyLens();
 
 	placeMountain();
 	placeCabin();
@@ -783,6 +875,9 @@ const FLY_SPEED = 1.2; // units per second; Shift triples it
 const VIEW_KEYS = [ 'posX', 'posY', 'posZ', 'pitch', 'yaw', 'fov',
 	'mountainDistance', 'mountainScreenX', 'cabinDistance', 'cabinScreenX' ];
 let homeView = null;
+
+// Set by the menu's unlock sequence (see bindInput); until then nothing moves the camera.
+let unlocked = false;
 
 function snapshotView() {
 
@@ -868,6 +963,9 @@ function rebaseProp( world, layout, distanceKey, screenKey ) {
  */
 function moveCamera( change ) {
 
+	// The edit is made to the hero shot, so the opening has to be out of the way first.
+	intro.finish();
+
 	const mountainAt = mountain.mesh ? mountain.container.position.clone() : null;
 	const cabinAt = cabin.wall ? cabin.container.position.clone() : null;
 
@@ -880,8 +978,7 @@ function moveCamera( change ) {
 	} );
 
 	// The fov has to be current before solving: the anchor is a share of it.
-	camera.fov = fovForAspect( camera.aspect );
-	camera.updateProjectionMatrix();
+	applyLens();
 
 	const aspect = Number.isFinite( camera.aspect ) && camera.aspect > 0 ? camera.aspect : 1;
 	if ( mountainAt ) rebaseProp( mountainAt, mountainLayout( aspect ), 'mountainDistance', 'mountainScreenX' );
@@ -1017,8 +1114,8 @@ export const MOUNTAIN = {
 	haze: ${f( tuned.mountainHaze, 3 )},
 	baseMist: ${f( tuned.mountainBaseMist, 2 )},
 	baseMistHeight: ${f( tuned.mountainBaseMistHeight, 2 )},
-	wide: { aspect: ${MOUNTAIN.wide.aspect}, anchorX: ${MOUNTAIN.wide.anchorX}, width: ${MOUNTAIN.wide.width}, height: ${MOUNTAIN.wide.height} },
-	narrow: { aspect: ${MOUNTAIN.narrow.aspect}, anchorX: ${MOUNTAIN.narrow.anchorX}, width: ${MOUNTAIN.narrow.width}, height: ${MOUNTAIN.narrow.height} }
+	wide: { aspect: ${MOUNTAIN.wide.aspect}, anchorX: ${MOUNTAIN.wide.anchorX} },
+	narrow: { aspect: ${MOUNTAIN.narrow.aspect}, anchorX: ${MOUNTAIN.narrow.anchorX} }
 };
 
 export const CABIN = {
@@ -1034,8 +1131,11 @@ export const CABIN = {
 };
 
 export const RESPONSIVE = {
-	minHorizontalFov: ${f( tuned.minHFov, 1 )},
-	maxFov: ${f( tuned.maxFov, 1 )}
+	phoneAspect: ${RESPONSIVE.phoneAspect},
+	phoneZoom: ${f( tuned.phoneZoom, 2 )},
+	tabletAspect: ${RESPONSIVE.tabletAspect},
+	tabletZoom: ${f( tuned.tabletZoom, 2 )},
+	desktopAspect: ${RESPONSIVE.desktopAspect}
 };
 
 export const GRASS = {
@@ -1076,7 +1176,7 @@ function buildTweakPanel( texture ) {
 
 			}
 
-			// A test rig: none of it is saved with the shot, and switching it off restores daylight.
+			// The clock: none of it is saved with the shot. Stopping it holds the light where it is.
 			if ( key === 'dayNight' ) {
 
 				setDayNight( value );
@@ -1119,7 +1219,7 @@ function buildTweakPanel( texture ) {
 
 			}
 
-			if ( key === 'minHFov' || key === 'maxFov' ) {
+			if ( key === 'phoneZoom' || key === 'tabletZoom' ) {
 
 				applyTunedCamera();
 				return;
@@ -1202,8 +1302,12 @@ function buildTweakPanel( texture ) {
 
 	panel
 		.toggle( 'freeze', 'Freeze camera (no shake / mouse-look)', true )
+		.group( 'Intro' )
+		.buttons( [
+			{ label: 'Replay intro', onClick: () => intro.start() }
+		] )
 		.group( 'Day / night (test)' )
-		.toggle( 'dayNight', 'Run the day / night cycle', dayNight.enabled )
+		.toggle( 'dayNight', 'Run the day / night cycle', dayNight.running )
 		.slider( 'daySpeed', 'speed (game hours / sec)', dayNight.speed, 0, 24, 0.1 )
 		.slider( 'dayHour', 'time of day (hour)', dayNight.hour, 0, 24, 0.01 )
 		.group( 'Camera' )
@@ -1250,8 +1354,8 @@ function buildTweakPanel( texture ) {
 		.slider( 'cabinExposure', 'brightness', tuned.cabinExposure, 0.2, 4, 0.05 )
 		.slider( 'cabinUnlit', 'cabin baked light', tuned.cabinUnlit, 0, 1, 0.01 )
 		.group( 'Responsive' )
-		.slider( 'minHFov', 'min horizontal fov', tuned.minHFov, 8, 40, 0.5 )
-		.slider( 'maxFov', 'max vertical fov', tuned.maxFov, 30, 75, 0.5 )
+		.slider( 'phoneZoom', 'phone zoom (1 = desktop, lower = wider)', tuned.phoneZoom, 0.3, 1.2, 0.01 )
+		.slider( 'tabletZoom', 'tablet zoom (1 = desktop, lower = wider)', tuned.tabletZoom, 0.3, 1.2, 0.01 )
 		.group( 'Grade' )
 		.slider( 'vignetteFrom', 'vignette start', tuned.vignetteFrom, 0, 1.5, 0.01 )
 		.slider( 'vignetteTo', 'vignette end', tuned.vignetteTo, 0.2, 2.5, 0.01 )
@@ -1727,9 +1831,9 @@ function configBlock( text, name ) {
 
 	if ( open < 0 || end < 0 ) return '';
 
-	// Strip nested objects. MOUNTAIN's wide/narrow layouts carry their own `width` and
-	// `height`, and a flat scan lets those shadow the cone's — the last one wins, so the
-	// mountain came back 0.94 units tall on every config import.
+	// Strip nested objects. The wide/narrow layouts carry keys of their own, and a flat scan
+	// lets those shadow the block's — the last one wins. MOUNTAIN's once carried `width` and
+	// `height`, and the mountain came back 0.94 units tall on every config import.
 	return text.slice( open + 1, end ).replace( /\{[^{}]*\}/g, '' );
 
 }
@@ -1762,9 +1866,7 @@ function applyConfigText( panel, text, source ) {
 			scalarsFrom( configBlock( text, 'FOG' ), {
 				boxSize: 'fogBox', start: 'fogStart', range: 'fogRange'
 			} ),
-			scalarsFrom( configBlock( text, 'RESPONSIVE' ), {
-				minHorizontalFov: 'minHFov'
-			} ),
+			scalarsFrom( configBlock( text, 'RESPONSIVE' ) ),
 			scalarsFrom( configBlock( text, 'MOUNTAIN' ), {
 				distance: 'mountainDistance', summitY: 'mountainSummitY', modelScale: 'mountainScale',
 				screenX: 'mountainScreenX', exposure: 'mountainExposure', unlit: 'mountainUnlit',
@@ -1995,21 +2097,109 @@ function buildMountain() {
 }
 
 /**
- * Vertical fov that holds a minimum *horizontal* fov.
+ * How far the camera zooms out for a viewport shape: 1 is the hero framing, lower sees more.
  *
  * three's fov is vertical, so a narrow viewport crops the sides rather than zooming out,
- * and the mountain and cabin fall out of frame on a phone. Widening the vertical fov is
- * the only way to buy horizontal room back. Clamped below by the hero shot's own fov, so
- * a wide desktop viewport keeps exactly the framing everything else was tuned against.
+ * and the mountain and cabin fall out of frame on a phone. The zoom is tuned at a phone
+ * and a tablet shape (RESPONSIVE in shot.js) and blended by aspect; from the desktop
+ * shape up it is 1, so a wide viewport keeps exactly the framing everything else was
+ * tuned against. Narrower than the phone it shrinks with the aspect, which holds the
+ * phone's horizontal view.
  */
-function fovForAspect( aspect ) {
+function zoomForAspect( aspect ) {
 
 	const safe = Number.isFinite( aspect ) && aspect > 0 ? aspect : 1;
-	const halfH = THREE.MathUtils.degToRad( tuned.minHFov ) * 0.5;
-	const needed = THREE.MathUtils.radToDeg(
-		2 * Math.atan( Math.tan( halfH ) / Math.max( 0.05, safe ) ) );
+	const { phoneAspect, tabletAspect, desktopAspect } = RESPONSIVE;
+	const { phoneZoom, tabletZoom } = tuned;
+	const between = ( from, to ) => THREE.MathUtils.clamp( ( safe - from ) / ( to - from ), 0, 1 );
 
-	return THREE.MathUtils.clamp( needed, tuned.fov, tuned.maxFov );
+	if ( safe >= desktopAspect ) return 1;
+	if ( safe >= tabletAspect ) return THREE.MathUtils.lerp( tabletZoom, 1, between( tabletAspect, desktopAspect ) );
+	if ( safe >= phoneAspect ) return THREE.MathUtils.lerp( phoneZoom, tabletZoom, between( phoneAspect, tabletAspect ) );
+	return Math.max( 0.1, phoneZoom * safe / phoneAspect );
+
+}
+
+/**
+ * Sets the camera's lens for the current viewport: the zoom, and a shift that holds the
+ * bottom edge of the frame where the hero shot has it.
+ *
+ * A plain wider fov opens the frame evenly above and below, and below is the underside of
+ * the meadow's near edge — it showed as a strip of sky under the grass on a phone. The
+ * view offset is a lens shift, not a tilt: the camera still looks level, so nothing leans,
+ * and the extra room all goes into the sky.
+ */
+function applyLens( baseFov = tuned.fov ) {
+
+	const aspect = viewAspect();
+	const lens = lensFor( aspect, baseFov );
+
+	camera.fov = lens.fov;
+
+	if ( lens.shift > 1e-4 ) camera.setViewOffset( aspect, 1, 0, - lens.shift, aspect, 1 );
+	else camera.clearViewOffset();
+
+	camera.updateProjectionMatrix();
+
+}
+
+/**
+ * The lens for a viewport shape, starting from `baseFov` — the hero's, or the opening's on
+ * its way down. `shift` is the lift as a share of the frame's height: the bottom edge sits
+ * (1 - zoom) / 2 of it lower than the hero's would, so the frame is raised by exactly that.
+ */
+function lensFor( aspect, baseFov ) {
+
+	const zoom = zoomForAspect( aspect );
+	const halfTan = Math.tan( THREE.MathUtils.degToRad( baseFov ) * 0.5 );
+
+	return {
+		fov: THREE.MathUtils.clamp( THREE.MathUtils.radToDeg( 2 * Math.atan( halfTan / zoom ) ), 1, 150 ),
+		shift: ( 1 - Math.min( zoom, 1 ) ) * 0.5
+	};
+
+}
+
+function viewAspect() {
+
+	return Number.isFinite( camera.aspect ) && camera.aspect > 0 ? camera.aspect : 1;
+
+}
+
+const _heroPosition = new THREE.Vector3();
+const _heroQuaternion = new THREE.Quaternion();
+const _heroEuler = new THREE.Euler();
+
+/**
+ * The framing the mountain, the cabin and the sky are laid out against: the tuned hero
+ * shot. Not the rig's live anchor — the opening flies that, and props solved against it
+ * would ride along with the camera instead of standing still while it moves.
+ */
+function heroView() {
+
+	const aspect = viewAspect();
+
+	_heroPosition.set( tuned.posX, tuned.posY, tuned.posZ );
+	_heroEuler.set( tuned.pitch, tuned.yaw, 0, 'YXZ' );
+	_heroQuaternion.setFromEuler( _heroEuler );
+
+	return {
+		position: _heroPosition,
+		quaternion: _heroQuaternion,
+		fov: lensFor( aspect, tuned.fov ).fov,
+		aspect
+	};
+
+}
+
+/** The hero shot as a pose the opening can fly to. */
+function heroPose() {
+
+	return {
+		position: [ tuned.posX, tuned.posY, tuned.posZ ],
+		rotation: [ tuned.pitch, tuned.yaw, 0 ],
+		fov: tuned.fov
+	};
 
 }
 
@@ -2023,9 +2213,7 @@ function mountainLayout( aspect ) {
 
 	return {
 		t,
-		anchorX: THREE.MathUtils.lerp( wide.anchorX, narrow.anchorX, t ),
-		width: THREE.MathUtils.lerp( wide.width, narrow.width, t ),
-		height: THREE.MathUtils.lerp( wide.height, narrow.height, t )
+		anchorX: THREE.MathUtils.lerp( wide.anchorX, narrow.anchorX, t )
 	};
 
 }
@@ -2043,6 +2231,8 @@ function buildCabin() {
 		lampWall: CABIN.lampWall,
 		detail: cabinDetail,
 		detailShadow: CABIN.emblemShadow,
+		detailContact: CABIN.emblemContact,
+		detailShadowOffset: CABIN.emblemShadowOffset,
 		detailRelief: CABIN.emblemRelief
 	} ) );
 
@@ -2068,15 +2258,10 @@ function placeCabin() {
 
 	if ( ! cabin.wall ) return;
 
-	const aspect = Number.isFinite( camera.aspect ) && camera.aspect > 0 ? camera.aspect : 1;
-	const layout = layoutFor( CABIN, aspect );
+	const view = heroView();
+	const layout = layoutFor( CABIN, view.aspect );
 
-	cabin.place( {
-		position: cameraRig.basePosition,
-		quaternion: cameraRig.baseQuaternion,
-		fov: camera.fov,
-		aspect
-	}, surface, {
+	cabin.place( view, surface, {
 		// A nudge for the desktop composition the reference was drawn for. It fades out toward
 		// phone layouts, which have their own anchor: applied in full, a desktop nudge dragged
 		// the imported cabin to the middle of the phone frame, where it hid the mountain.
@@ -2107,28 +2292,22 @@ function insectNoFlyZones() {
 
 function placeMountain() {
 
-	const aspect = Number.isFinite( camera.aspect ) && camera.aspect > 0 ? camera.aspect : 1;
-	const layout = mountainLayout( aspect );
+	const view = heroView();
+	const layout = mountainLayout( view.aspect );
 
-	// Solved against the rig's *anchor*, not the live camera: the rig adds shake and
-	// mouse-look every frame, and re-solving against those would glue the mountain to the
-	// camera and kill the parallax that is the whole point of it being geometry.
-	mountain.place( {
-		position: cameraRig.basePosition,
-		quaternion: cameraRig.baseQuaternion,
-		fov: camera.fov,
-		aspect
-	}, {
+	// Solved against the hero shot, not the live camera: the rig adds shake and mouse-look
+	// every frame and the opening flies it, and re-solving against either would glue the
+	// mountain to the camera and kill the parallax that is the whole point of it being geometry.
+	mountain.place( view, {
 		// A nudge for the desktop composition the reference was drawn for. It fades out toward
 		// phone layouts, which have their own anchor: applied in full, a desktop nudge dragged
 		// the imported cabin to the middle of the phone frame, where it hid the mountain.
 		anchorX: layout.anchorX + tuned.mountainScreenX * ( 1 - layout.t ),
 		distance: tuned.mountainDistance,
-		// Solved from the summit so the peak sits at the same world height however narrow
-		// the viewport gets and whatever cone an artist has imported.
-		baseY: tuned.mountainSummitY - mountain.modelTop() * layout.height * tuned.mountainScale,
-		width: layout.width * tuned.mountainScale,
-		height: layout.height * tuned.mountainScale
+		// Solved from the summit so the peak sits at the same world height whatever cone an
+		// artist has imported and however it is scaled.
+		baseY: tuned.mountainSummitY - mountain.modelTop() * tuned.mountainScale,
+		scale: tuned.mountainScale
 	} );
 
 }
@@ -2181,19 +2360,27 @@ function bindInput() {
 
 	homeView = snapshotView();
 
-	// Enter Enter K M Enter Enter opens the menu. Nothing on the page hints at it, and the
-	// shortcuts below only answer while the menu is open, so a visitor who presses G does
-	// not get a terrain download and W does not fly them out of the shot.
+	// Enter Enter K M Enter Enter opens the menu. Nothing on the page hints at it, and every
+	// way of moving the camera — keys, scroll, middle-drag — and every shortcut stays dead
+	// until it has been typed, so a visitor who scrolls is not dollied out of the shot, W
+	// does not fly them off and G does not hand them a terrain download. Once unlocked they
+	// stay live for the rest of the visit, menu open or hidden.
 	const UNLOCK = [ 'enter', 'enter', 'k', 'm', 'enter', 'enter' ];
 	const recent = [];
 
-	// Space twice in quick succession starts or stops the day / night test, menu or not.
+	// Space twice in quick succession sets the day / night clock running or stops it — for
+	// every visitor, menu or not.
 	const DOUBLE_SPACE = 400; // ms between the two presses
 	let lastSpace = - Infinity;
+
+	// A click, tap or key while the title is up sends the camera on its way now.
+	window.addEventListener( 'pointerdown', () => intro.skip() );
 
 	window.addEventListener( 'keydown', event => {
 
 		if ( isTypingTarget( event.target ) ) return;
+
+		intro.skip();
 
 		const key = event.key.toLowerCase();
 
@@ -2209,7 +2396,7 @@ function bindInput() {
 				if ( event.timeStamp - lastSpace < DOUBLE_SPACE ) {
 
 					lastSpace = - Infinity;
-					setDayNight( ! dayNight.enabled );
+					setDayNight( ! dayNight.running );
 
 				} else {
 
@@ -2229,6 +2416,7 @@ function bindInput() {
 			if ( panel && recent.length === UNLOCK.length && recent.every( ( k, i ) => k === UNLOCK[ i ] ) ) {
 
 				recent.length = 0;
+				unlocked = true;
 				panel.show();
 				return;
 
@@ -2236,7 +2424,7 @@ function bindInput() {
 
 		}
 
-		if ( ! panel || ! panel.visible ) return;
+		if ( ! unlocked ) return;
 
 		if ( FLY_KEYS.has( key ) ) flyKeys.add( key );
 
@@ -2261,6 +2449,28 @@ function bindInput() {
 	const lastPointer = new THREE.Vector2();
 	let navigating = false;
 
+	// Click or tap an insect and it bolts. A fingertip covers far more than a fly does, so
+	// touch gets a wider catch than the mouse.
+	const insectUnder = event => insects && insects.pick(
+		event.clientX, event.clientY, camera, window.innerWidth, window.innerHeight,
+		event.pointerType === 'touch' ? 34 : 16 );
+
+	canvasEl.addEventListener( 'pointerdown', event => {
+
+		if ( event.button !== 0 ) return;
+		const insect = insectUnder( event );
+		if ( insect ) insects.startle( insect, event.clientX, event.clientY, camera, window.innerWidth, window.innerHeight );
+
+	} );
+
+	// The hand over an insect says it can be clicked; the crosshair everywhere else.
+	canvasEl.addEventListener( 'pointermove', event => {
+
+		if ( event.pointerType !== 'mouse' || navigating ) return;
+		canvasEl.style.cursor = insectUnder( event ) ? 'pointer' : '';
+
+	} );
+
 	// A middle-button press would otherwise start the browser's own autoscroll.
 	canvasEl.addEventListener( 'mousedown', event => {
 
@@ -2273,6 +2483,11 @@ function bindInput() {
 		if ( event.button !== 1 ) return;
 
 		event.preventDefault();
+
+		// Not before the menu is unlocked, and not while the opening is flying the camera:
+		// a drag would only fight it.
+		if ( ! unlocked || intro.active ) return;
+
 		navigating = true;
 		lastPointer.set( event.clientX, event.clientY );
 		try { canvasEl.setPointerCapture( event.pointerId ); } catch ( error ) { /* synthetic pointer */ }
@@ -2307,6 +2522,16 @@ function bindInput() {
 	canvasEl.addEventListener( 'wheel', event => {
 
 		event.preventDefault();
+
+		if ( intro.active ) {
+
+			intro.skip();
+			return;
+
+		}
+
+		if ( ! unlocked ) return;
+
 		const lines = event.deltaMode === 1 ? 16 : 1;
 		dolly( - event.deltaY * lines * 0.0015 * ( event.shiftKey ? 3 : 1 ) );
 
@@ -2346,12 +2571,13 @@ function onResize() {
 		? window.innerWidth / window.innerHeight
 		: camera.aspect || 1;
 
-	camera.fov = fovForAspect( camera.aspect );
-	camera.updateProjectionMatrix();
+	applyLens();
 
-	// Mountain and cabin are both framed in screen space, so a reshape moves them.
+	// Mountain and cabin are both framed in screen space, so a reshape moves them — and the
+	// opening title's spot in the sky with them.
 	placeMountain();
 	placeCabin();
+	intro.invalidate();
 
 	renderer.setSize( window.innerWidth, window.innerHeight );
 	sceneTarget.setSize( width, height );
@@ -2407,16 +2633,22 @@ function animate() {
 
 }
 
-/** Starts or stops the day / night test — from the menu's checkbox or a double Space. */
+/**
+ * Sets the day / night clock running or stops it — from the menu's checkbox or a double
+ * Space. Stopped, the light stays at whatever hour it had reached.
+ */
 function setDayNight( on ) {
 
-	dayNight.enabled = on;
+	dayNight.running = on;
 	tuned.dayNight = on;
 	if ( panel ) panel.set( 'dayNight', on );
 
 }
 
-/** The time-of-day test cycle: off by default, run from the panel's Day / night group. */
+/**
+ * The time of day: opened at the light over Damavand right now (see build), held there,
+ * and looped fast when the clock is set running.
+ */
 const _moonRise = new THREE.Vector3();
 
 function updateDayNight( dt ) {
@@ -2432,13 +2664,9 @@ function updateDayNight( dt ) {
 
 	}
 
-	dayNight.update( dt, {
-		position: cameraRig.basePosition,
-		quaternion: cameraRig.baseQuaternion,
-		fov: camera.fov,
-		aspect: camera.aspect,
-		moonRise
-	} );
+	const view = heroView();
+	view.moonRise = moonRise;
+	dayNight.update( dt, view );
 
 	uniforms.u_lampWall.value = cabin.lampWorld( uniforms.u_lampPosition.value, uniforms.u_lampNormal.value );
 	cabin.setLampGlow( dayNight.lamp );
@@ -2449,7 +2677,24 @@ function updateDayNight( dt ) {
 	grade.tintOpacity = tuned.tintOpacity * dayNight.tintScale;
 	grade.tintColor.copy( dayNight.tintColor );
 
-	if ( dayNight.enabled && panel && panel.visible ) panel.set( 'dayHour', + dayNight.hour.toFixed( 2 ) );
+	if ( dayNight.running && panel && panel.visible ) panel.set( 'dayHour', + dayNight.hour.toFixed( 2 ) );
+
+}
+
+/** The opening: flies the rig's anchor and the lens until it lands on the hero shot. */
+function updateIntro( dt ) {
+
+	if ( ! intro.active ) return;
+
+	const pose = intro.update( dt, heroPose() );
+
+	cameraRig.setAnchor( {
+		position: pose.position,
+		rotation: pose.rotation,
+		cameraDistance: SHOT.camera.cameraDistance
+	} );
+
+	applyLens( pose.fov );
 
 }
 
@@ -2457,8 +2702,10 @@ function frame( dt ) {
 
 	uniforms.u_time.value += dt;
 
+	updateIntro( dt );
 	updateKeyboardFly( dt );
 	cameraRig.update( dt );
+	intro.placeTitle( camera );
 	insects.update( dt, camera );
 	updateDayNight( dt );
 

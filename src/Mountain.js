@@ -389,7 +389,7 @@ export class Mountain {
 	 * every frame, and re-solving against those would glue the mountain to the camera and
 	 * kill the parallax that is the entire reason it is geometry and not a painted sky.
 	 */
-	place( view, { anchorX = 0, distance = 12, baseY = - 1.6, width = 1, height = 1 } = {} ) {
+	place( view, { anchorX = 0, distance = 12, baseY = - 1.6, scale = 1 } = {} ) {
 
 		if ( ! this.mesh ) return;
 
@@ -413,8 +413,8 @@ export class Mountain {
 			view.position.z + forward.z * distance + right.z * offset
 		);
 
-		// Non-uniform on purpose — see MOUNTAIN.wide/narrow in shot.js.
-		this.container.scale.set( width, height, width );
+		// Uniform, so the cone's shape is the same on every screen — see MOUNTAIN in shot.js.
+		this.container.scale.setScalar( scale );
 
 	}
 

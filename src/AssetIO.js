@@ -59,24 +59,51 @@ export function pickFile( accept ) {
  *
  * Blender's glTF exporter offers Draco compression, and a file exported with it lists
  * KHR_draco_mesh_compression as *required*: without a decoder the loader refuses it outright,
- * which is what every compressed hand-off hit. The decoder is vendored under vendor/draco/,
- * runs in workers, and is only fetched the first time a compressed file arrives.
+ * which is what every compressed hand-off hit. The decoder is vendored under vendor/draco/
+ * and runs in workers; the page warms it up at startup (preloadDecoder).
  */
 let dracoLoader = null;
+let loaders = null;
 
-async function loadGLTF( arrayBuffer ) {
+function gltfLoaders() {
 
-	const [ { GLTFLoader }, { DRACOLoader } ] = await Promise.all( [
+	if ( loaders ) return loaders;
+
+	loaders = Promise.all( [
 		import( '../vendor/GLTFLoader.js' ),
 		import( '../vendor/DRACOLoader.js' )
-	] );
-
-	if ( ! dracoLoader ) {
+	] ).then( ( [ { GLTFLoader }, { DRACOLoader } ] ) => {
 
 		dracoLoader = new DRACOLoader();
 		dracoLoader.setDecoderPath( new URL( '../vendor/draco/', import.meta.url ).href );
 
-	}
+		// One mesh decodes in one worker, so the cabin's body ships in four pieces and the
+		// mountain and the emblem come alongside: enough workers to take them all at once,
+		// short of every core the device has.
+		const cores = navigator.hardwareConcurrency || 4;
+		dracoLoader.setWorkerLimit( Math.max( 2, Math.min( 6, cores - 1 ) ) );
+
+		return { GLTFLoader };
+
+	} );
+
+	return loaders;
+
+}
+
+/**
+ * Fetches the loader code and the Draco decoder now, while the models are still downloading,
+ * so their meshes go to the workers the moment they arrive.
+ */
+export function preloadDecoder() {
+
+	return gltfLoaders().then( () => dracoLoader.preload() );
+
+}
+
+async function loadGLTF( arrayBuffer ) {
+
+	const { GLTFLoader } = await gltfLoaders();
 
 	const loader = new GLTFLoader();
 	loader.setDRACOLoader( dracoLoader );
@@ -439,9 +466,12 @@ export async function parseGLBWithMap( arrayBuffer ) {
 
 	// Each object's slice of the merged buffers, in merge order: vertices and index entries are
 	// both concatenated part after part, so a part can still be picked out after the merge.
+	// `paint` says which material it wears: a big mesh split into pieces for faster decoding
+	// arrives as several parts in the same paint, and they are still one object.
 	const ranges = parts.map( p => ( {
 		vertices: p.geometry.attributes.position.count,
-		indices: p.geometry.index ? p.geometry.index.count : 0
+		indices: p.geometry.index ? p.geometry.index.count : 0,
+		paint: p.material ? p.material.name || p.material.uuid : ''
 	} ) );
 
 	const geometry = await mergeGeometries( parts.map( p => p.geometry ) );
@@ -621,6 +651,15 @@ export function exportTexturePNG( texture, filename ) {
 	canvas.height = height;
 
 	const context = canvas.getContext( '2d' );
+
+	// A bitmap decoded with WebGL's flip already applied is stored upside down.
+	if ( texture.userData && texture.userData.flippedAtDecode ) {
+
+		context.translate( 0, height );
+		context.scale( 1, - 1 );
+
+	}
+
 	context.drawImage( image, 0, 0 );
 
 	return new Promise( ( resolve, reject ) => {
