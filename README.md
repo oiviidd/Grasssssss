@@ -288,7 +288,12 @@ parameters.
 - **Load order** — the page builds the hill, grass, flowers and insects while the cabin
   and mountain are still decoding (`buildWorld`, then `buildProps` in `src/main.js`), and
   decodes its textures off the main thread. On a desktop it reaches its first frame in
-  about 2.5 s from a local server, down from about 5.5 s.
+  about 2.5 s from a local server, down from about 5.5 s. One frame of the hero shot is
+  drawn behind the loader so every mesh and texture is on the GPU before the camera moves.
+- **Frame rate** — phones render at 1.5× pixel density instead of 2×, and any device that
+  cannot hold about 40 fps steps its resolution down a quarter at a time (back up when it
+  has room) — `adaptResolution` in `src/main.js`. The opening runs on real time, so a slow
+  device does not stretch the camera move.
 - **The emblem on the door** — `CABIN.emblemContact`, `emblemShadow`,
   `emblemShadowOffset` and `emblemRelief` in `src/shot.js`: the dark seam where it meets
   the door, the faint short shadow it drops, how far that shadow falls, and how strongly
