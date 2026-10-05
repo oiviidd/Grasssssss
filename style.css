@@ -156,7 +156,11 @@ html, body {
    moving band. */
 .intro-glint {
 	position: absolute;
-	inset: 0;
+	/* Grown on every side, with the same padding back, so the letters stay in register: the
+	   mask only reaches the element's own box, and with the title's tight line-height that
+	   box ended just under the letters and sliced their glow off in a straight line. */
+	inset: -0.4em;
+	padding: 0.4em;
 	color: #fff;
 	text-shadow: 0 0 22px rgba(255, 255, 255, 0.95), 0 0 2px #fff;
 	opacity: 0;
