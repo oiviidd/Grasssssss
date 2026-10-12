@@ -6,7 +6,7 @@
 	<title>Grass &amp; Light — a My Little Storybook study</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link id="intro-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&amp;family=Inter+Tight:wght@400;500&amp;display=swap">
+	<link id="intro-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Inter+Tight:wght@400;500&amp;display=swap">
 	<link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,6 +18,26 @@
 			<p class="intro-kicker"><span>Welcome to</span></p>
 			<h2 class="intro-title">Kazmos</h2>
 		</div>
+	</div>
+
+	<div id="door-hint" hidden>
+		<div class="door-hint-mark" aria-hidden="true">
+			<span class="door-hint-ring"></span>
+			<span class="door-hint-ring"></span>
+			<span class="door-hint-ring"></span>
+		</div>
+		<span class="door-hint-lead" aria-hidden="true"></span>
+		<button class="door-hint-label" type="button">
+			<span class="door-hint-kicker">Click the door</span>
+			<span class="door-hint-title">Step inside</span>
+		</button>
+	</div>
+
+	<div id="inside-ui" hidden>
+		<button class="inside-back" type="button">
+			<span class="inside-back-arrow" aria-hidden="true"></span>
+			<span>Step outside</span>
+		</button>
 	</div>
 
 	<div id="loader">

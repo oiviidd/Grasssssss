@@ -250,6 +250,248 @@ html, body {
 	to { opacity: 1; }
 }
 
+/* ── door hint ──────────────────────────────────────────────────────────── */
+
+/*
+ * "Step inside", pinned to the cabin door by src/DoorHint.js, which sets the position and
+ * --r, half the door's height on screen. Rings of lamplight spread from the door like
+ * ripples on water; a hairline draws out from it to the label.
+ */
+
+#door-hint {
+	position: fixed;
+	left: 0;
+	top: 0;
+	z-index: 11;
+	pointer-events: none;
+	--r: 40px;
+	--warm: 255, 214, 160;
+	--gap: clamp(14px, 2vw, 26px);
+	--lead: clamp(28px, 4.2vw, 64px);
+}
+
+#door-hint[hidden] { display: none; }
+
+.door-hint-mark {
+	position: absolute;
+	left: 0;
+	top: 0;
+}
+
+.door-hint-ring {
+	position: absolute;
+	left: calc(var(--r) * -1.15);
+	top: calc(var(--r) * -1.15);
+	width: calc(var(--r) * 2.3);
+	height: calc(var(--r) * 2.3);
+	border-radius: 50%;
+	border: 1px solid rgba(var(--warm), 0.7);
+	box-shadow: 0 0 18px rgba(var(--warm), 0.25), inset 0 0 18px rgba(var(--warm), 0.18);
+	opacity: 0;
+	transform: scale(0.45);
+}
+
+.is-shown .door-hint-ring { animation: door-ripple 4.2s cubic-bezier(0.22, 0.6, 0.35, 1) infinite; }
+.is-shown .door-hint-ring:nth-child(2) { animation-delay: 1.4s; }
+.is-shown .door-hint-ring:nth-child(3) { animation-delay: 2.8s; }
+.is-hover .door-hint-ring { animation-duration: 2.4s; border-color: rgba(var(--warm), 0.95); }
+
+@keyframes door-ripple {
+	0% { opacity: 0; transform: scale(0.45); }
+	18% { opacity: 0.85; }
+	100% { opacity: 0; transform: scale(1.25); }
+}
+
+/* the hairline from the door to the label, drawn out from the door's side */
+.door-hint-lead {
+	position: absolute;
+	top: 0;
+	left: calc(var(--r) * 0.55);
+	width: var(--lead);
+	height: 1px;
+	background: linear-gradient(90deg, rgba(var(--warm), 0.95), rgba(var(--warm), 0.25));
+	transform-origin: 0 50%;
+	transform: scaleX(0);
+}
+
+.door-hint-lead::before {
+	content: "";
+	position: absolute;
+	left: -2px;
+	top: -2px;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: rgb(var(--warm));
+	box-shadow: 0 0 10px 2px rgba(var(--warm), 0.7);
+}
+
+.is-left .door-hint-lead {
+	left: auto;
+	right: calc(var(--r) * 0.55);
+	transform-origin: 100% 50%;
+	background: linear-gradient(270deg, rgba(var(--warm), 0.95), rgba(var(--warm), 0.25));
+}
+
+.is-left .door-hint-lead::before { left: auto; right: -2px; }
+
+.is-shown .door-hint-lead { animation: door-lead 1.1s cubic-bezier(0.65, 0, 0.35, 1) 0.35s both; }
+
+@keyframes door-lead {
+	from { transform: scaleX(0); }
+	to { transform: scaleX(1); }
+}
+
+.door-hint-label {
+	position: absolute;
+	top: 0;
+	left: calc(var(--r) * 0.55 + var(--lead) + var(--gap));
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.35em;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: #fff8ef;
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+	pointer-events: auto;
+	transform: translateY(-50%);
+	text-shadow: 0 1px 18px rgba(20, 12, 4, 0.55), 0 0 2px rgba(20, 12, 4, 0.3);
+	opacity: 0;
+}
+
+.is-left .door-hint-label {
+	left: auto;
+	right: calc(var(--r) * 0.55 + var(--lead) + var(--gap));
+	align-items: flex-end;
+	text-align: right;
+}
+
+.is-shown .door-hint-label { animation: door-label 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.9s both; }
+
+@keyframes door-label {
+	from { opacity: 0; filter: blur(8px); }
+	to { opacity: 1; filter: blur(0); }
+}
+
+.door-hint-kicker {
+	font: 500 10px/1 "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+	letter-spacing: 0.32em;
+	text-transform: uppercase;
+	color: rgba(255, 244, 228, 0.85);
+	margin-right: -0.32em;
+}
+
+.door-hint-title {
+	font: italic 400 clamp(26px, 2.7vw, 44px)/1 "Instrument Serif", ui-serif, Georgia, serif;
+	letter-spacing: 0.005em;
+	transition: color 0.4s, text-shadow 0.4s;
+}
+
+.door-hint-label:hover .door-hint-title,
+.is-hover .door-hint-title {
+	color: #fff;
+	text-shadow: 0 0 24px rgba(var(--warm), 0.8), 0 1px 18px rgba(20, 12, 4, 0.5);
+}
+
+.door-hint-label:focus-visible { outline: 1px solid rgba(var(--warm), 0.8); outline-offset: 8px; }
+
+/* Visited: the label and its line step back; the rings carry on, quieter. */
+.is-known .door-hint-lead,
+.is-known .door-hint-label { display: none; }
+.is-known .door-hint-ring { border-color: rgba(var(--warm), 0.45); }
+
+/* Leaving the door: everything fades together. */
+#door-hint:not(.is-shown) .door-hint-mark,
+#door-hint:not(.is-shown) .door-hint-lead,
+#door-hint:not(.is-shown) .door-hint-label {
+	opacity: 0;
+	transition: opacity 0.5s ease;
+	animation: none;
+}
+
+@media (max-width: 640px) {
+	#door-hint { --lead: 22px; --gap: 10px; }
+	.door-hint-kicker { font-size: 9px; letter-spacing: 0.26em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.is-shown .door-hint-ring { animation: none; opacity: 0.6; transform: scale(0.9); }
+	.is-shown .door-hint-ring:nth-child(n + 2) { display: none; }
+	.is-shown .door-hint-lead,
+	.is-shown .door-hint-label { animation: intro-fade 0.8s ease both; }
+	.is-shown .door-hint-lead { transform: scaleX(1); }
+}
+
+/* ── inside the cabin ───────────────────────────────────────────────────── */
+
+.is-inside #app canvas { cursor: default; }
+
+#inside-ui {
+	position: fixed;
+	left: 0;
+	right: 0;
+	bottom: max(28px, env(safe-area-inset-bottom));
+	z-index: 11;
+	display: flex;
+	justify-content: center;
+	pointer-events: none;
+}
+
+#inside-ui[hidden] { display: none; }
+
+.inside-back {
+	display: inline-flex;
+	align-items: center;
+	gap: 14px;
+	padding: 12px 22px 12px 18px;
+	border: 1px solid rgba(255, 240, 220, 0.35);
+	border-radius: 999px;
+	background: rgba(30, 18, 10, 0.28);
+	-webkit-backdrop-filter: blur(10px);
+	backdrop-filter: blur(10px);
+	color: #fff6ea;
+	font: 500 11px/1 "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+	letter-spacing: 0.28em;
+	text-transform: uppercase;
+	cursor: pointer;
+	pointer-events: auto;
+	opacity: 0;
+	transform: translateY(10px);
+	transition: opacity 0.9s ease, transform 0.9s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s, background 0.3s;
+}
+
+#inside-ui.is-shown .inside-back { opacity: 1; transform: none; }
+
+.inside-back:hover { border-color: rgba(255, 240, 220, 0.8); background: rgba(30, 18, 10, 0.42); }
+.inside-back:focus-visible { outline: 1px solid rgba(255, 240, 220, 0.8); outline-offset: 4px; }
+
+.inside-back-arrow {
+	position: relative;
+	width: 22px;
+	height: 1px;
+	background: currentColor;
+	transition: width 0.3s ease;
+}
+
+.inside-back-arrow::before {
+	content: "";
+	position: absolute;
+	left: 1px;
+	top: 50%;
+	width: 7px;
+	height: 7px;
+	border-left: 1px solid currentColor;
+	border-bottom: 1px solid currentColor;
+	transform: translateY(-50%) rotate(45deg);
+}
+
+.inside-back:hover .inside-back-arrow { width: 30px; }
+
 /* ── hud ────────────────────────────────────────────────────────────────── */
 
 #hud {

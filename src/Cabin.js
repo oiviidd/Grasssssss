@@ -492,7 +492,13 @@ export class Cabin {
 				vertexShader: lampGlowVert,
 				fragmentShader: lampGlowFrag,
 				transparent: true,
-				blending: THREE.AdditiveBlending,
+				// Additive in colour, but leaving alpha alone: the open doorway marks itself with
+				// alpha 0 (see Passage.js), and the halo hangs right over it.
+				blending: THREE.CustomBlending,
+				blendSrc: THREE.SrcAlphaFactor,
+				blendDst: THREE.OneFactor,
+				blendSrcAlpha: THREE.ZeroFactor,
+				blendDstAlpha: THREE.OneFactor,
 				depthWrite: false
 			} )
 		);

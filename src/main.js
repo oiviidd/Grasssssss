@@ -38,6 +38,9 @@ import { Mountain, createMountainGeometry, bakeMountainMap } from './Mountain.js
 import { Cabin, markDetails, bakeDetailShadow } from './Cabin.js';
 import { DayNight } from './DayNight.js';
 import { Intro, waitForTitleFonts } from './Intro.js';
+import { Interior } from './Interior.js';
+import { Passage } from './Passage.js';
+import { DoorHint } from './DoorHint.js';
 import { SHOT, INTRO, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
 import { pickFile, parseGLB, parseGLBWithMap, preloadDecoder, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
@@ -110,7 +113,11 @@ const statusEl = document.getElementById( 'status' );
 /* ── renderer ──────────────────────────────────────────────────────────────── */
 
 const renderer = new THREE.WebGLRenderer( { antialias: false, alpha: false } );
-renderer.setPixelRatio( Math.min( window.devicePixelRatio, 2 ) );
+// Phones start a step lower: their screens are dense enough that 1.5× reads as sharp as 2×,
+// and their GPUs shade every one of those extra pixels through the grass and the bloom.
+const TOUCH = typeof window.matchMedia === 'function' && window.matchMedia( '(pointer: coarse)' ).matches;
+const MAX_PIXEL_RATIO = Math.min( window.devicePixelRatio || 1, TOUCH ? 1.5 : 2 );
+renderer.setPixelRatio( MAX_PIXEL_RATIO );
 renderer.autoClear = false;
 // The original renders with no gamma conversion at all; the grade pass is what brings
 // the image up. r122 defaults to LinearEncoding, which matches — set explicitly so the
@@ -261,14 +268,14 @@ const DECODE_OFF_THREAD = typeof createImageBitmap === 'function' && ( () => {
  */
 async function loadTexture( file, options ) {
 
-	const { flipY = true, wrap = null, minFilter = null } = options || {};
+	const { flipY = true, wrap = null, minFilter = null, root = TEXTURE_PATH } = options || {};
 
 	let texture;
 
 	if ( DECODE_OFF_THREAD ) {
 
-		const response = await fetch( TEXTURE_PATH + file );
-		if ( ! response.ok ) throw new Error( TEXTURE_PATH + file + ' → ' + response.status );
+		const response = await fetch( root + file );
+		if ( ! response.ok ) throw new Error( root + file + ' → ' + response.status );
 
 		const image = await createImageBitmap( await response.blob(),
 			Object.assign( { premultiplyAlpha: 'none' }, flipY ? { imageOrientation: 'flipY' } : {} ) );
@@ -284,7 +291,7 @@ async function loadTexture( file, options ) {
 
 		texture = await new Promise( ( resolve, reject ) => {
 
-			const t = textureLoader.load( TEXTURE_PATH + file, () => resolve( t ), undefined, reject );
+			const t = textureLoader.load( root + file, () => resolve( t ), undefined, reject );
 			t.flipY = flipY;
 
 		} );
@@ -316,6 +323,13 @@ const cabin = new Cabin( uniforms );
 // Opens at the light over Damavand at this moment, Iran time, and holds it there.
 const dayNight = new DayNight( uniforms, { tintHex: SHOT.grade.tintColorHex } ).syncToSun( new Date() );
 const intro = new Intro( document.getElementById( 'intro' ), INTRO );
+
+// The cabin's door, and the room behind it.
+const interior = new Interior();
+const passage = new Passage( interior, uniforms );
+const doorHint = new DoorHint( document.getElementById( 'door-hint' ), () => enterCabin() );
+const insideUI = document.getElementById( 'inside-ui' );
+const loadInterior = () => interior.preload( file => loadTexture( file, { root: '' } ) );
 
 /**
  * An optional hand-off: null when the file is not there, the parsed prop when it is.
@@ -598,10 +612,20 @@ function buildProps( assets ) {
 
 	updateStatus();
 
-	// Before the first frame, so the page never flashes the hero shot first.
+	// One frame of the hero shot, drawn behind the loader. three only uploads a mesh and its
+	// textures the first time it is in view, and the cabin is not in the opening frame: its
+	// million triangles and its atlas reached the GPU halfway through the camera move, which
+	// on a phone stalled the move outright. Drawn here, everything is resident before it starts.
+	frame( 0 );
+
+	// Before the first visible frame, so the page never flashes the hero shot.
 	intro.start();
 
 	loaderEl.classList.add( 'is-hidden' );
+
+	// The room behind the door is not needed until someone opens it: its paintings come in
+	// once the page is up, decoded off the main thread while the opening plays.
+	setTimeout( () => loadInterior().catch( error => console.warn( 'Interior failed to load', error ) ), 1200 );
 
 	// One menu: the HUD's status, hand-off buttons and key list live inside the tweak panel,
 	// and both stay hidden until the unlock sequence in bindInput().
@@ -610,6 +634,7 @@ function buildProps( assets ) {
 	// Handle for poking at the scene from the console.
 	window.grassStudy = {
 		renderer, scene, camera, cameraRig, bloom, grade, uniforms,
+		passage, interior, enterCabin, exitCabin,
 
 		// Live getters, not snapshots. installTerrain() reassigns these module bindings, so
 		// a plain property would keep handing back the terrain that was loaded at startup —
@@ -2129,14 +2154,17 @@ function zoomForAspect( aspect ) {
  * view offset is a lens shift, not a tilt: the camera still looks level, so nothing leans,
  * and the extra room all goes into the sky.
  */
-function applyLens( baseFov = tuned.fov ) {
+function applyLens( baseFov = tuned.fov, shiftScale = 1 ) {
 
 	const aspect = viewAspect();
 	const lens = lensFor( aspect, baseFov );
+	// The way into the cabin lets the shift go as it nears the door, so the doorway ends up
+	// in the middle of the frame rather than raised with the sky.
+	const shift = lens.shift * shiftScale;
 
 	camera.fov = lens.fov;
 
-	if ( lens.shift > 1e-4 ) camera.setViewOffset( aspect, 1, 0, - lens.shift, aspect, 1 );
+	if ( shift > 1e-4 ) camera.setViewOffset( aspect, 1, 0, - shift, aspect, 1 );
 	else camera.clearViewOffset();
 
 	camera.updateProjectionMatrix();
@@ -2237,6 +2265,8 @@ function buildCabin() {
 	} ) );
 
 	placeCabin();
+	// The artist's model has its doorway measured; the blockout's is its own door plane.
+	passage.attach( cabin, cabinWallGeometry ? CABIN.doorway : null );
 
 }
 
@@ -2384,6 +2414,9 @@ function bindInput() {
 
 		const key = event.key.toLowerCase();
 
+		// Escape leaves the cabin, for everyone.
+		if ( key === 'escape' && passage.state === 'inside' ) exitCabin();
+
 		if ( key === ' ' ) {
 
 			// No page scroll, and no click on whichever menu control still has focus — that
@@ -2458,18 +2491,56 @@ function bindInput() {
 	canvasEl.addEventListener( 'pointerdown', event => {
 
 		if ( event.button !== 0 ) return;
+
+		// In the room, a drag pans a narrow screen across the painting.
+		if ( passage.state === 'inside' ) {
+
+			roomDrag = event.pointerType === 'mouse' ? null : event.clientX;
+			return;
+
+		}
+
 		const insect = insectUnder( event );
 		if ( insect ) insects.startle( insect, event.clientX, event.clientY, camera, window.innerWidth, window.innerHeight );
+		else if ( doorUnder( event ) ) enterCabin();
 
 	} );
 
-	// The hand over an insect says it can be clicked; the crosshair everywhere else.
+	// The hand over an insect or the door says it can be clicked; the crosshair everywhere else.
 	canvasEl.addEventListener( 'pointermove', event => {
 
+		if ( passage.state === 'inside' ) {
+
+			if ( event.pointerType === 'mouse' ) {
+
+				interior.setPointer( event.clientX / window.innerWidth * 2 - 1, - ( event.clientY / window.innerHeight * 2 - 1 ) );
+
+			} else if ( roomDrag !== null ) {
+
+				interior.dragPan( ( event.clientX - roomDrag ) / window.innerWidth );
+				roomDrag = event.clientX;
+
+			}
+
+			return;
+
+		}
+
 		if ( event.pointerType !== 'mouse' || navigating ) return;
-		canvasEl.style.cursor = insectUnder( event ) ? 'pointer' : '';
+
+		const overDoor = ! insectUnder( event ) && doorUnder( event );
+		passage.setHover( overDoor );
+		doorHint.setHover( overDoor );
+		canvasEl.style.cursor = overDoor || insectUnder( event ) ? 'pointer' : '';
 
 	} );
+
+	let roomDrag = null;
+	const endRoomDrag = () => { roomDrag = null; };
+	canvasEl.addEventListener( 'pointerup', endRoomDrag );
+	canvasEl.addEventListener( 'pointercancel', endRoomDrag );
+
+	insideUI.querySelector( '.inside-back' ).addEventListener( 'click', () => exitCabin() );
 
 	// A middle-button press would otherwise start the browser's own autoscroll.
 	canvasEl.addEventListener( 'mousedown', event => {
@@ -2484,9 +2555,9 @@ function bindInput() {
 
 		event.preventDefault();
 
-		// Not before the menu is unlocked, and not while the opening is flying the camera:
-		// a drag would only fight it.
-		if ( ! unlocked || intro.active ) return;
+		// Not before the menu is unlocked, and not while the opening or the door is flying the
+		// camera: a drag would only fight it.
+		if ( ! unlocked || intro.active || passage.state !== 'outside' ) return;
 
 		navigating = true;
 		lastPointer.set( event.clientX, event.clientY );
@@ -2530,7 +2601,7 @@ function bindInput() {
 
 		}
 
-		if ( ! unlocked ) return;
+		if ( ! unlocked || passage.state !== 'outside' ) return;
 
 		const lines = event.deltaMode === 1 ? 16 : 1;
 		dolly( - event.deltaY * lines * 0.0015 * ( event.shiftKey ? 3 : 1 ) );
@@ -2583,6 +2654,8 @@ function onResize() {
 	sceneTarget.setSize( width, height );
 	bloomTarget.setSize( width, height );
 	bloom.setSize( width, height );
+	passage.setSize( width, height );
+	interior.setSize( width, height );
 
 }
 
@@ -2626,10 +2699,12 @@ function animate() {
 	requestAnimationFrame( animate );
 
 	const now = performance.now() / 1000;
-	const dt = Math.min( now - lastTime, 1 / 20 );
+	const elapsed = now - lastTime;
+	const dt = Math.min( elapsed, 1 / 20 );
 	lastTime = now;
 
-	frame( dt );
+	adaptResolution( elapsed );
+	frame( dt, Math.min( elapsed, 0.1 ) );
 
 }
 
@@ -2698,30 +2773,311 @@ function updateIntro( dt ) {
 
 }
 
-function frame( dt ) {
+/**
+ * Holds the frame rate up by trading resolution. Every second it looks at the average frame;
+ * a device that cannot keep about 40 fps renders at a quarter step fewer pixels per CSS pixel,
+ * down to 1; one that holds well over 55 for a few seconds earns a step back. The first
+ * seconds after the page appears are left out — they are shader and upload work, not the
+ * steady cost of a frame.
+ */
+const resolution = { ratio: MAX_PIXEL_RATIO, time: 0, frames: 0, calm: 0, settle: 2 };
+
+function adaptResolution( elapsed ) {
+
+	// a backgrounded tab, or the first frames
+	if ( elapsed > 0.5 ) return;
+	if ( resolution.settle > 0 ) {
+
+		resolution.settle -= elapsed;
+		return;
+
+	}
+
+	resolution.time += elapsed;
+	resolution.frames ++;
+	if ( resolution.time < 1 ) return;
+
+	const average = resolution.time / resolution.frames;
+	resolution.time = 0;
+	resolution.frames = 0;
+
+	let next = resolution.ratio;
+
+	if ( average > 1 / 40 && resolution.ratio > 1 ) {
+
+		next = Math.max( 1, resolution.ratio - 0.25 );
+		resolution.calm = 0;
+
+	} else if ( average < 1 / 55 && resolution.ratio < MAX_PIXEL_RATIO ) {
+
+		if ( ++ resolution.calm >= 4 ) {
+
+			next = Math.min( MAX_PIXEL_RATIO, resolution.ratio + 0.25 );
+			resolution.calm = 0;
+
+		}
+
+	} else {
+
+		resolution.calm = 0;
+
+	}
+
+	if ( next !== resolution.ratio ) {
+
+		resolution.ratio = next;
+		renderer.setPixelRatio( next );
+		onResize();
+		// the new size costs a frame or two of reallocation; do not judge it on those
+		resolution.settle = 0.5;
+
+	}
+
+}
+
+/**
+ * `introDt` is real elapsed time, capped only against a stalled tab: the opening keeps its
+ * length however slow the device, where the clamped `dt` everything else runs on would have
+ * stretched the camera move out on a phone dropping under 20 fps.
+ */
+function frame( dt, introDt = dt ) {
 
 	uniforms.u_time.value += dt;
 
-	updateIntro( dt );
-	updateKeyboardFly( dt );
-	cameraRig.update( dt );
-	intro.placeTitle( camera );
-	insects.update( dt, camera );
+	const pose = passage.update( dt );
+	const outside = passage.showsOutside;
+
+	if ( outside ) {
+
+		updateIntro( introDt );
+		if ( pose ) flyPassage( pose );
+		else if ( passageRig ) landPassage();
+		else updateKeyboardFly( dt );
+		cameraRig.update( dt );
+		intro.placeTitle( camera );
+		insects.update( dt, camera );
+
+	}
+
 	updateDayNight( dt );
+	updateDoor( dt );
 
-	// The sky sphere is only radius 15, so it rides with the camera rather than enclosing
-	// the world.
-	skyMesh.position.copy( camera.position );
+	if ( outside ) {
 
-	updateInteractionField();
+		// The sky sphere is only radius 15, so it rides with the camera rather than enclosing
+		// the world.
+		skyMesh.position.copy( camera.position );
+
+		updateInteractionField();
+		passage.prepare();
+
+		renderer.setRenderTarget( sceneTarget );
+		renderer.clear( true, true, true );
+		renderer.render( scene, camera );
+
+		bloom.render( renderer, sceneTarget.texture, bloomTarget );
+
+	}
+
+	if ( passage.composing ) {
+
+		// Both on screen: the meadow and the room each into a target, then put together.
+		passage.targets();
+		grade.render( renderer, bloomTarget.texture, width, height, passage.outsideTarget );
+		interior.render( renderer, passage.insideTarget );
+		passage.compose( renderer, sceneTarget.texture, camera );
+
+	} else if ( outside ) {
+
+		grade.render( renderer, bloomTarget.texture, width, height, null );
+
+	} else {
+
+		// Inside, the meadow is not drawn at all.
+		interior.render( renderer, null );
+
+	}
+
+	renderer.setRenderTarget( null );
+
+}
+
+/* ── the cabin door ────────────────────────────────────────────────────────── */
+
+// The rig's own settings while the passage flies it, to hand back afterwards.
+let passageRig = null;
+// How long the door has been free to open, for the hint's entrance.
+let doorIdle = 0;
+// Whether the room's paintings are on the GPU yet.
+let interiorWarm = false;
+
+const doorRay = new THREE.Raycaster();
+const _doorNdc = new THREE.Vector2();
+const _doorCentre = new THREE.Vector3();
+const _doorNormal = new THREE.Vector3();
+const warmTarget = FboHelper.createRenderTarget( 4, 4 );
+
+function doorOpenable() {
+
+	return passage.canEnter && ! intro.active && !! cabin.wall;
+
+}
+
+/** Whether the pointer `event` is over the cabin door. */
+function doorUnder( event ) {
+
+	if ( ! doorOpenable() ) return false;
+
+	_doorNdc.set( event.clientX / window.innerWidth * 2 - 1, - ( event.clientY / window.innerHeight ) * 2 + 1 );
+	doorRay.setFromCamera( _doorNdc, camera );
+	return passage.hitTest( doorRay );
+
+}
+
+/**
+ * The frame the swinging leaf wears, taken now: the door without its own light, and without
+ * the grass, flowers and insects in front of it, which would otherwise be painted onto the
+ * leaf and swing round with it.
+ */
+function captureDoor() {
+
+	const hide = [ grass.container, flowers.container, insects && insects.container, passage.light ]
+		.filter( object => object && object.visible );
+	hide.forEach( object => { object.visible = false; } );
 
 	renderer.setRenderTarget( sceneTarget );
 	renderer.clear( true, true, true );
 	renderer.render( scene, camera );
 
-	bloom.render( renderer, sceneTarget.texture, bloomTarget );
-	grade.render( renderer, bloomTarget.texture, width, height, null );
+	hide.forEach( object => { object.visible = true; } );
 
+	passage.capture( renderer, sceneTarget.texture, camera );
 	renderer.setRenderTarget( null );
+
+}
+
+function enterCabin() {
+
+	if ( ! doorOpenable() ) return;
+
+	// The paintings are usually in long before anyone reaches the door; if not, the door
+	// waits for them rather than opening onto nothing.
+	if ( ! interior.ready ) {
+
+		passage.setHover( true );
+		loadInterior().then( () => enterCabin() ).catch( () => passage.setHover( false ) );
+		return;
+
+	}
+
+	captureDoor();
+
+	passageRig = {
+		look: cameraRig.lookStrength,
+		shake: cameraRig.shakeStrength,
+		distance: cameraRig.cameraDistance
+	};
+
+	const fov = lensFor( viewAspect(), tuned.fov ).fov;
+	passage.enter( { position: cameraRig.basePosition, quaternion: cameraRig.baseQuaternion }, fov );
+
+	passage.setHover( false );
+	doorHint.setHover( false );
+	renderer.domElement.style.cursor = '';
+
+}
+
+function exitCabin() {
+
+	if ( ! passage.exit() ) return;
+
+	setInsideUI( false );
+	document.body.classList.remove( 'is-inside' );
+
+}
+
+/** Each frame of the walk to (or from) the door: the passage's pose, on the rig. */
+function flyPassage( pose ) {
+
+	const settle = 1 - pose.blend;
+
+	if ( ! passageRig ) passageRig = { look: cameraRig.lookStrength, shake: cameraRig.shakeStrength, distance: cameraRig.cameraDistance };
+
+	cameraRig.setAnchor( {
+		position: pose.position,
+		rotation: pose.rotation,
+		cameraDistance: passageRig.distance
+	} );
+
+	// The handheld drift and the mouse look were tuned for a camera metres away; at the
+	// doorway they would shove it about, so both fade as it closes in.
+	cameraRig.shakeStrength = passageRig.shake * ( 0.2 + 0.8 * settle );
+	cameraRig.lookStrength = passageRig.look * ( 0.3 + 0.7 * settle );
+
+	applyLens( tuned.fov, settle );
+
+}
+
+/** Back outside: the rig and the lens as they were before the door. */
+function landPassage() {
+
+	cameraRig.shakeStrength = passageRig.shake;
+	cameraRig.lookStrength = passageRig.look;
+	passageRig = null;
+	applyLens();
+
+}
+
+function setInsideUI( on ) {
+
+	if ( on ) {
+
+		insideUI.hidden = false;
+		void insideUI.offsetWidth;
+
+	}
+
+	insideUI.classList.toggle( 'is-shown', on );
+
+}
+
+/** The hint, the room's light, and the hand-over between outside and in. */
+function updateDoor( dt ) {
+
+	// The hint comes once the opening is over and the door has been free a moment.
+	doorIdle = doorOpenable() ? doorIdle + dt : 0;
+	const hint = doorIdle > 1.4;
+	doorHint.show( hint );
+
+	if ( hint ) {
+
+		passage.doorFrame( _doorCentre, _doorNormal );
+		doorHint.place( camera, _doorCentre, passage.doorHeight() );
+
+	}
+
+	interior.setLight( dayNight.elevation );
+
+	if ( passage.state !== 'outside' ) {
+
+		interior.update( dt );
+
+	} else if ( interior.ready && ! interiorWarm && ! intro.active ) {
+
+		// Upload the paintings while nothing is moving, not on the click.
+		interior.render( renderer, warmTarget );
+		renderer.setRenderTarget( null );
+		interiorWarm = true;
+
+	}
+
+	const inside = passage.state === 'inside';
+	if ( inside && ! document.body.classList.contains( 'is-inside' ) ) {
+
+		document.body.classList.add( 'is-inside' );
+		doorHint.setKnown();
+		setInsideUI( true );
+
+	}
 
 }

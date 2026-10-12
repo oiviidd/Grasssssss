@@ -320,6 +320,15 @@ export const CABIN = {
 	emblemShadowOffset: [ 0.004, - 0.006 ],
 	emblemRelief: 1,
 
+	// The doorway on cabin_custom.glb, same units: the opening inside the architrave (its
+	// centre, on the leaf's face, and its size), and how far the architrave stands proud of
+	// the leaf. Measured by raycasting the model, like the lantern. The door that swings open,
+	// the light round its gap and the click target are all fitted to this (Passage.js).
+	// `opening` is how far in front of the leaf the open doorway is drawn: the handle is part
+	// of the cabin's mesh and stands 0.035 proud, so anything less leaves it hanging in the air
+	// once the door has swung away. It stays behind the architrave, which still frames it.
+	doorway: { centre: [ - 0.0105, 0.4465, 0.723 ], size: [ 0.365, 0.893 ], frame: 0.047, opening: 0.039 },
+
 	// The reference puts the cabin's near corner about 75% across a 2:1 frame, i.e. NDC
 	// +0.49, and lets the rest run off the edge.
 	wide: { aspect: 1.9, anchorX: 1.05, scale: 1 },
