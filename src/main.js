@@ -119,7 +119,13 @@ const renderer = new THREE.WebGLRenderer( { antialias: false, alpha: false } );
 // and their GPUs shade every one of those extra pixels through the grass and the bloom.
 const TOUCH = typeof window.matchMedia === 'function' && window.matchMedia( '(pointer: coarse)' ).matches;
 const MAX_PIXEL_RATIO = Math.min( window.devicePixelRatio || 1, TOUCH ? 1.5 : 2 );
-renderer.setPixelRatio( MAX_PIXEL_RATIO );
+// A phone starts a step under its ceiling and may go below one pixel per CSS pixel: the
+// painterly image survives softness far better than it survives a stutter.
+const START_PIXEL_RATIO = Math.min( MAX_PIXEL_RATIO, TOUCH ? 1.25 : 2 );
+const MIN_PIXEL_RATIO = TOUCH ? 0.75 : 1;
+// and a phone draws fewer, slightly wider blades — the same cover for well under the vertices
+const PHONE_GRASS = TOUCH ? { count: 0.6, width: 1.2 } : { count: 1, width: 1 };
+renderer.setPixelRatio( START_PIXEL_RATIO );
 renderer.autoClear = false;
 // The original renders with no gamma conversion at all; the grade pass is what brings
 // the image up. r122 defaults to LinearEncoding, which matches — set explicitly so the
@@ -549,8 +555,8 @@ async function buildWorld( assets ) {
 		rimFade,
 		maxSlope,
 		bounds: scatterArea(),
-		bladeCount: GRASS.bladeCount,
-		bladeWidthScale: GRASS.bladeWidthScale,
+		bladeCount: Math.round( GRASS.bladeCount * PHONE_GRASS.count ),
+		bladeWidthScale: GRASS.bladeWidthScale * PHONE_GRASS.width,
 		bladeHeightScale: GRASS.bladeHeightScale,
 		tuftInstances: GRASS.tuftInstances,
 		tuftScale: GRASS.tuftScale
@@ -2508,7 +2514,6 @@ function bindInput() {
 			roomDown = { x: event.clientX, y: event.clientY };
 			// a touch takes over from the tour
 			if ( roomTour >= 0 ) endRoomTour();
-			if ( event.pointerType !== 'mouse' ) tilt.request();
 			return;
 
 		}
@@ -2566,6 +2571,10 @@ function bindInput() {
 
 	} );
 	canvasEl.addEventListener( 'pointercancel', endRoomDrag );
+
+	// A phone may only ask for its gyroscope from the end of a tap — a touch's pointerdown does
+	// not count as the user's gesture — so any lifted finger asks, until it has been answered.
+	window.addEventListener( 'pointerup', event => { if ( event.pointerType !== 'mouse' ) tilt.request(); } );
 	canvasEl.addEventListener( 'pointerleave', event => {
 
 		if ( event.pointerType === 'mouse' && passage.state === 'inside' ) setRoomSpot( null );
@@ -2808,11 +2817,11 @@ function updateIntro( dt ) {
 /**
  * Holds the frame rate up by trading resolution. Every second it looks at the average frame;
  * a device that cannot keep about 40 fps renders at a quarter step fewer pixels per CSS pixel,
- * down to 1; one that holds well over 55 for a few seconds earns a step back. The first
+ * down to 1 (0.75 on a phone); one that holds well over 55 for a few seconds earns a step back. The first
  * seconds after the page appears are left out — they are shader and upload work, not the
  * steady cost of a frame.
  */
-const resolution = { ratio: MAX_PIXEL_RATIO, time: 0, frames: 0, calm: 0, settle: 2 };
+const resolution = { ratio: START_PIXEL_RATIO, time: 0, frames: 0, calm: 0, settle: 2 };
 
 function adaptResolution( elapsed ) {
 
@@ -2835,9 +2844,9 @@ function adaptResolution( elapsed ) {
 
 	let next = resolution.ratio;
 
-	if ( average > 1 / 40 && resolution.ratio > 1 ) {
+	if ( average > 1 / 40 && resolution.ratio > MIN_PIXEL_RATIO ) {
 
-		next = Math.max( 1, resolution.ratio - 0.25 );
+		next = Math.max( MIN_PIXEL_RATIO, resolution.ratio - 0.25 );
 		resolution.calm = 0;
 
 	} else if ( average < 1 / 55 && resolution.ratio < MAX_PIXEL_RATIO ) {
@@ -2989,8 +2998,6 @@ function captureDoor() {
 
 function enterCabin() {
 
-	// from the tap on the door, which is when a phone may ask for its gyroscope
-	tilt.request();
 	tilt.recentre();
 
 	// the hint shows as the opening flight lands; taken then, it waits for the camera

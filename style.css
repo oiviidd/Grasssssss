@@ -335,7 +335,7 @@ html, body {
 
 .is-left .door-hint-lead::before { left: auto; right: -2px; }
 
-.is-shown .door-hint-lead { animation: door-lead 0.9s cubic-bezier(0.65, 0, 0.35, 1) 0.1s both; }
+.is-shown .door-hint-lead { animation: door-lead 0.7s cubic-bezier(0.65, 0, 0.35, 1) both; }
 
 @keyframes door-lead {
 	from { transform: scaleX(0); }
@@ -371,7 +371,7 @@ html, body {
 	text-align: right;
 }
 
-.is-shown .door-hint-label { animation: door-label 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.45s both; }
+.is-shown .door-hint-label { animation: door-label 1s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both; }
 
 @keyframes door-label {
 	from { opacity: 0; filter: blur(8px); }
