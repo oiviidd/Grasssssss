@@ -123,8 +123,8 @@ const MAX_PIXEL_RATIO = Math.min( window.devicePixelRatio || 1, TOUCH ? 1.5 : 2 
 // painterly image survives softness far better than it survives a stutter.
 const START_PIXEL_RATIO = Math.min( MAX_PIXEL_RATIO, TOUCH ? 1.25 : 2 );
 const MIN_PIXEL_RATIO = TOUCH ? 0.75 : 1;
-// and a phone draws fewer, slightly wider blades — the same cover for well under the vertices
-const PHONE_GRASS = TOUCH ? { count: 0.6, width: 1.2 } : { count: 1, width: 1 };
+// and a phone draws fewer, wider blades — about the original site's 49k, with the same cover
+const PHONE_GRASS = TOUCH ? { count: 0.38, width: 1.45 } : { count: 1, width: 1 };
 renderer.setPixelRatio( START_PIXEL_RATIO );
 renderer.autoClear = false;
 // The original renders with no gamma conversion at all; the grade pass is what brings
@@ -2888,6 +2888,15 @@ function frame( dt, introDt = dt ) {
 	passage.update( dt );
 	const outside = passage.showsOutside;
 
+	// the gyroscope looks round the meadow, and round the room
+	tilt.update( dt );
+	if ( tilt.active ) {
+
+		cameraRig.setTilt( tilt.quaternion );
+		interior.setTilt( tilt.x, tilt.y );
+
+	}
+
 	if ( outside ) {
 
 		updateIntro( introDt );
@@ -3149,7 +3158,6 @@ function updateDoor( dt ) {
 
 	if ( passage.state !== 'outside' ) {
 
-		if ( tilt.active ) interior.setTilt( tilt.x, tilt.y );
 		interior.update( dt );
 		if ( roomTour >= 0 ) updateRoomTour( dt );
 

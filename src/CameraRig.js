@@ -129,6 +129,13 @@ export class CameraRig {
 		this.lookY = 0;
 		this.mouseXY = new THREE.Vector2();
 
+		// a phone's gyroscope (src/Tilt.js), turning the look as the mouse does on a desktop; the
+		// original applies the whole turn, which on this narrower lens is too much
+		this.tiltStrength = 0.45;
+		this._tilt = new THREE.Quaternion();
+		this._hasTilt = false;
+		this._identity = new THREE.Quaternion();
+
 		// free-look, added on top of the authored anchor
 		this.orbitYaw = 0;
 		this.orbitPitch = 0;
@@ -159,6 +166,14 @@ export class CameraRig {
 			);
 
 		} );
+
+	}
+
+	/** The gyroscope's turn (Tilt.quaternion), applied about the same pivot as the mouse look. */
+	setTilt( quaternion ) {
+
+		this._tilt.copy( this._identity ).slerp( quaternion, this.tiltStrength );
+		this._hasTilt = true;
 
 	}
 
@@ -199,6 +214,7 @@ export class CameraRig {
 		this._e.set( this.lookX, this.lookY, 0, 'XYZ' );
 		this._q2.setFromEuler( this._e );
 		camera.quaternion.multiply( this._q2 );
+		if ( this._hasTilt ) camera.quaternion.multiply( this._tilt );
 
 		this._forward.set( 0, 0, - 1 ).applyQuaternion( camera.quaternion );
 		camera.position.copy( this._pivot ).addScaledVector( this._forward, - ( distance + this.zoom ) );
