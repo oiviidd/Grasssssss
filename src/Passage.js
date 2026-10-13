@@ -3,19 +3,19 @@
  * The way in and out of the cabin.
  *
  * Outside, the door breathes a thin line of warm light round its gap (and more when the
- * pointer is on it). Clicked, it unlatches and swings out, the room's light pours through,
- * the camera walks up to the doorway, and a watercolour wash blooms out of it until the
- * room has the whole screen. Leaving runs it backwards: the wash drains back into the
- * doorway as the camera steps away, and the door swings shut behind it.
+ * pointer is on it). Clicked, it unlatches and swings out and the room's light pours
+ * through; then, with the camera held where it stands, a watercolour wash blooms out of the
+ * doorway until the room has the whole screen. Leaving runs it backwards: the wash drains
+ * back into the doorway and the door swings shut.
  *
  * The door on the artist's model is painted into the cabin's own mesh, so the leaf that
- * swings is a stand-in: a thin box whose face is the frame itself, captured at the click
- * (see leafFrag). Where it stood, a "hole" writes alpha 0 into the scene; the composite
- * shows the room in those pixels.
+ * swings is a stand-in: a slab as thick as a real door, whose face is the frame itself,
+ * captured at the click (see leafFrag). Where it stood, a "hole" writes alpha 0 into the
+ * scene; the composite shows the room in those pixels.
  *
  * Owns: the door meshes (inside the cabin's container), the capture, the targets the meadow
  * and the room are drawn into while both are on screen, and the timeline. main.js owns the
- * render order and the camera; it asks this module for a pose each frame.
+ * render order.
  */
 
 import * as THREE from '../vendor/three.module.js';
@@ -31,37 +31,30 @@ const GLOW_REST = 1.6;
 const GLOW_HOVER = 3.6;
 const GLOW_OPEN = 6;
 
-// How far the leaf swings out, and how thick it is (model units, the door being 0.33 wide).
+// How far the leaf swings out, and how thick it is: the doorway is 0.365 wide, a door
+// about 0.9 m, so 0.022 is a solid 5–6 cm slab of plank door.
 const SWING = THREE.MathUtils.degToRad( 80 );
-const LEAF_DEPTH = 0.016;
-
-// How much of the frame's height the doorway fills when the camera arrives.
-const ARRIVAL_FILL = 1.15;
-// How far the walk turns from the line of sight toward square on to the door, 0..1.
-const ARRIVAL_SQUARE = 0.5;
+const LEAF_DEPTH = 0.022;
 
 /**
  * The timeline, in seconds from the click. Going in:
  *   unlatch → swing   the leaf gives, then swings out
- *   push              the camera walks to the doorway
- *   wash              the watercolour takes the screen
+ *   wash              the watercolour takes the screen, once the door stands open
  *   dry               the room's wash dries back into the painting
- * Coming out runs on its own clock (LEAVE).
+ * Coming out runs on its own clock (LEAVE): the wash drains back first, then the door shuts.
  */
 const ENTER = {
 	unlatch: 0.22,
 	swing: [ 0.22, 1.55 ],
-	push: [ 0.12, 2.9 ],
-	wash: [ 1.3, 2.95 ],
-	dry: [ 1.9, 4.6 ],
-	done: 3.0
+	wash: [ 1.15, 3.05 ],
+	dry: [ 2.2, 4.6 ],
+	done: 3.1
 };
 
 const LEAVE = {
-	wet: [ 0.0, 0.7 ],
-	wash: [ 0.15, 1.85 ],
-	pull: [ 0.25, 2.85 ],
-	close: [ 1.55, 2.7 ],
+	wet: [ 0.0, 0.6 ],
+	wash: [ 0.1, 1.9 ],
+	close: [ 1.6, 2.8 ],
 	done: 2.9
 };
 
@@ -70,15 +63,6 @@ const span = ( t, [ a, b ] ) => clamp01( ( t - a ) / ( b - a ) );
 const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow( - 2 * t + 2, 3 ) / 2;
 const easeInOutSine = t => - ( Math.cos( Math.PI * t ) - 1 ) / 2;
 const easeOutCubic = t => 1 - Math.pow( 1 - t, 3 );
-
-function lerpAngle( a, b, t ) {
-
-	let d = ( b - a ) % ( Math.PI * 2 );
-	if ( d > Math.PI ) d -= Math.PI * 2;
-	if ( d < - Math.PI ) d += Math.PI * 2;
-	return a + d * t;
-
-}
 
 /** Adds colour, leaves the alpha as it was — the doorway's 0 must survive what is drawn over it. */
 function additiveKeepAlpha( material ) {
@@ -98,7 +82,6 @@ function additiveKeepAlpha( material ) {
 const _v = new THREE.Vector3();
 const _m4 = new THREE.Matrix4();
 const _h = new THREE.Matrix3();
-const _e = new THREE.Euler();
 const _ndc = new THREE.Vector3();
 
 export class Passage {
@@ -129,10 +112,6 @@ export class Passage {
 		this.outsideTarget = null;
 		this.insideTarget = null;
 		this.captureTarget = null;
-
-		// camera poses, as [ pitch, yaw, roll ] rotations the rig takes
-		this._from = null;
-		this._pose = { position: [ 0, 0, 0 ], rotation: [ 0, 0, 0 ], blend: 0 };
 
 		this.progress = 0; // the room's share of the screen
 		this.open = 0;     // 0..1 of the swing
@@ -190,6 +169,8 @@ export class Passage {
 			uniforms: {
 				u_capture: { value: null },
 				u_captureMatrix: { value: new THREE.Matrix4() },
+				u_size: { value: this.size },
+				u_depth: { value: LEAF_DEPTH },
 				u_light: { value: new THREE.Vector3() },
 				u_lightPosition: { value: new THREE.Vector3() }
 			},
@@ -396,21 +377,10 @@ export class Passage {
 
 	}
 
-	/**
-	 * Through the door. `from` is the camera's anchor right now ({ position: Vector3,
-	 * quaternion }), and where it returns to on the way out; `fov` the vertical field of view
-	 * the camera will have, to work out how close to stand.
-	 */
-	enter( from, fov ) {
+	/** Through the door. The camera stays where it is; the door and the wash do the moving. */
+	enter() {
 
 		if ( ! this.canEnter ) return false;
-
-		_e.setFromQuaternion( from.quaternion, 'YXZ' );
-		this._from = {
-			position: from.position.toArray(),
-			rotation: [ _e.x, _e.y, 0 ]
-		};
-		this._fov = fov;
 
 		this.state = 'entering';
 		this.time = 0;
@@ -436,63 +406,7 @@ export class Passage {
 
 	}
 
-	/**
-	 * The camera's pose at the doorway, close enough for it to fill the frame. It walks up
-	 * along the line it already sees the door on, turned halfway to square — the cabin stands
-	 * at an angle to the shot, and swinging round to face the door head-on swept the camera
-	 * across the cabin's side.
-	 */
-	_arrival() {
-
-		const centre = new THREE.Vector3();
-		const normal = new THREE.Vector3();
-		this.doorFrame( centre, normal );
-
-		const approach = new THREE.Vector3().fromArray( this._from.position ).sub( centre );
-		approach.y = 0;
-		approach.normalize().lerp( normal, ARRIVAL_SQUARE ).normalize();
-
-		const distance = this.doorHeight() / ( ARRIVAL_FILL * 2 * Math.tan( THREE.MathUtils.degToRad( this._fov ) / 2 ) );
-		const position = centre.clone().addScaledVector( approach, distance );
-
-		return {
-			position: position.toArray(),
-			rotation: [ 0, Math.atan2( approach.x, approach.z ), 0 ]
-		};
-
-	}
-
-	/**
-	 * Between two poses: the position eased by `p`; the gaze turned from `from`'s toward the
-	 * door by `r` — aimed at the door from wherever the camera is now, so it stays in frame the
-	 * whole way. Lerping the two end rotations instead turned the camera ahead of its walk,
-	 * and on a narrow phone frame the door slid off the edge halfway there.
-	 */
-	_poseBetween( from, to, p, r ) {
-
-		const pose = this._pose;
-		for ( let i = 0; i < 3; i ++ ) pose.position[ i ] = from.position[ i ] + ( to.position[ i ] - from.position[ i ] ) * p;
-
-		const centre = _v;
-		this.doorFrame( centre, _ndc );
-		const dx = centre.x - pose.position[ 0 ];
-		const dy = centre.y - pose.position[ 1 ];
-		const dz = centre.z - pose.position[ 2 ];
-		const lookYaw = Math.atan2( - dx, - dz );
-		const lookPitch = Math.atan2( dy, Math.hypot( dx, dz ) );
-
-		pose.rotation[ 0 ] = from.rotation[ 0 ] + ( lookPitch - from.rotation[ 0 ] ) * r;
-		pose.rotation[ 1 ] = lerpAngle( from.rotation[ 1 ], lookYaw, r );
-		pose.rotation[ 2 ] = 0;
-		pose.blend = p;
-		return pose;
-
-	}
-
-	/**
-	 * Advances the timeline. Returns the camera pose while the passage is flying it — with
-	 * `blend`, 0 at the start pose and 1 at the doorway — and null otherwise.
-	 */
+	/** Advances the timeline. */
 	update( dt ) {
 
 		const interior = this.interior;
@@ -503,7 +417,7 @@ export class Passage {
 		this.lightMaterial.uniforms.u_intensity.value = this.glow;
 		if ( this.light ) this.light.visible = this.state !== 'inside';
 
-		if ( this.state === 'outside' || ! this.door ) return null;
+		if ( this.state === 'outside' || ! this.door ) return;
 
 		this.time += dt;
 		const t = this.time;
@@ -511,7 +425,7 @@ export class Passage {
 		if ( this.state === 'inside' ) {
 
 			interior.gust *= Math.exp( - dt * 0.5 );
-			return null;
+			return;
 
 		}
 
@@ -522,7 +436,7 @@ export class Passage {
 				this.progress = easeInOutSine( clamp01( t / 0.9 ) );
 				interior.wash = 0.6 * ( 1 - clamp01( ( t - 0.4 ) / 1.2 ) );
 				if ( t >= 1.6 ) this._arrive();
-				return null;
+				return;
 
 			}
 
@@ -535,14 +449,11 @@ export class Passage {
 			// takes the screen, then dries.
 			const wet = 0.25 + 0.75 * easeInOutSine( span( t, [ ENTER.wash[ 0 ] - 0.2, ENTER.wash[ 0 ] + 0.4 ] ) );
 			interior.wash = wet * ( 1 - easeInOutSine( span( t, ENTER.dry ) ) );
-			interior.zoom = BASE_ZOOM + 0.1 * easeOutCubic( clamp01( t / 5 ) );
-
-			const p = easeInOutCubic( span( t, ENTER.push ) );
-			const r = easeInOutSine( clamp01( span( t, ENTER.push ) / 0.8 ) );
-			const pose = this._poseBetween( this._from, this._arrival(), p, r );
+			// the room drifts in a little as it comes, and settles
+			interior.zoom = BASE_ZOOM + 0.08 * easeOutCubic( clamp01( ( t - ENTER.wash[ 0 ] ) / 4 ) );
 
 			if ( t >= ENTER.done ) this._arrive();
-			return pose;
+			return;
 
 		}
 
@@ -552,21 +463,16 @@ export class Passage {
 			this.progress = 1 - easeInOutSine( clamp01( t / 0.9 ) );
 			interior.wash = 0.6 * clamp01( t / 0.5 );
 			if ( t >= 1.0 ) this._leave();
-			return this._poseBetween( this._from, this._from, 0, 0 );
+			return;
 
 		}
 
 		interior.wash = Math.max( interior.wash, 0.75 * easeInOutSine( span( t, LEAVE.wet ) ) );
 		this.progress = 1 - easeInOutSine( span( t, LEAVE.wash ) );
-		interior.zoom = this._zoomFrom + ( BASE_ZOOM - this._zoomFrom ) * easeInOutSine( clamp01( t / LEAVE.done ) );
+		interior.zoom = this._zoomFrom + ( BASE_ZOOM - this._zoomFrom ) * easeInOutSine( span( t, LEAVE.wash ) );
 		this._setOpen( 1 - easeInOutCubic( span( t, LEAVE.close ) ) );
 
-		// the walk in, backwards
-		const p = 1 - easeInOutCubic( span( t, LEAVE.pull ) );
-		const pose = this._poseBetween( this._from, this._arrival(), p, p );
-
 		if ( t >= LEAVE.done ) this._leave();
-		return pose;
 
 	}
 
@@ -586,13 +492,6 @@ export class Passage {
 		this.progress = 0;
 		this.interior.wash = 0;
 		this._setOpen( 0 );
-
-	}
-
-	/** The pose the camera came from, for handing the anchor back once the passage is done. */
-	get homePose() {
-
-		return this._from;
 
 	}
 

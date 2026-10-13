@@ -159,13 +159,15 @@ grass region the result is within 9 (summed RGB) of the reference, down from 43.
 
 Once the opening is over, the cabin door breathes a line of warm light round its gap and
 "Step inside" appears beside it (`src/DoorHint.js`). Clicking or tapping the door (or the
-label) opens it: the leaf swings out, the camera walks up to the doorway, and a watercolour
-wash blooms out of it into the room. **Step outside** (or Escape) runs it backwards.
+label) opens it: the leaf swings out and, with the camera held where it is, a watercolour
+wash blooms out of the doorway into the room. **Step outside** (or Escape) runs it
+backwards: the wash drains back into the doorway, then the door shuts.
 
-- `src/Passage.js` — the timeline, the camera path, and the door meshes. The door on the
-  artist's model is painted into the cabin mesh, so the swinging leaf is a stand-in whose
-  face is the frame captured at the click. Where it stood, a plane writes alpha 0; the
-  composite (`passageFrag`) shows the room in those pixels.
+- `src/Passage.js` — the timeline and the door meshes. The door on the artist's model is
+  painted into the cabin mesh, so the swinging leaf is a stand-in: a door-thick slab whose
+  outside face is the frame captured at the click, with plain planks and battens inside.
+  Where it stood, a plane writes alpha 0; the composite (`passageFrag`) shows the room in
+  those pixels, framed by the doorway.
 - `CABIN.doorway` in `src/shot.js` — the doorway on `cabin_custom.glb`, measured by
   raycasting the model. A new model needs it measured again.
 - `src/Interior.js` — the room: `assets/interior/{day,sunset,night}.webp`, blended by the

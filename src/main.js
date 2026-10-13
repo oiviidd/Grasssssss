@@ -2154,17 +2154,14 @@ function zoomForAspect( aspect ) {
  * view offset is a lens shift, not a tilt: the camera still looks level, so nothing leans,
  * and the extra room all goes into the sky.
  */
-function applyLens( baseFov = tuned.fov, shiftScale = 1 ) {
+function applyLens( baseFov = tuned.fov ) {
 
 	const aspect = viewAspect();
 	const lens = lensFor( aspect, baseFov );
-	// The way into the cabin lets the shift go as it nears the door, so the doorway ends up
-	// in the middle of the frame rather than raised with the sky.
-	const shift = lens.shift * shiftScale;
 
 	camera.fov = lens.fov;
 
-	if ( shift > 1e-4 ) camera.setViewOffset( aspect, 1, 0, - shift, aspect, 1 );
+	if ( lens.shift > 1e-4 ) camera.setViewOffset( aspect, 1, 0, - lens.shift, aspect, 1 );
 	else camera.clearViewOffset();
 
 	camera.updateProjectionMatrix();
@@ -2844,15 +2841,14 @@ function frame( dt, introDt = dt ) {
 
 	uniforms.u_time.value += dt;
 
-	const pose = passage.update( dt );
+	passage.update( dt );
 	const outside = passage.showsOutside;
 
 	if ( outside ) {
 
 		updateIntro( introDt );
-		if ( pose ) flyPassage( pose );
-		else if ( passageRig ) landPassage();
-		else updateKeyboardFly( dt );
+		// the camera holds still while the door opens or closes
+		if ( ! passage.busy ) updateKeyboardFly( dt );
 		cameraRig.update( dt );
 		intro.placeTitle( camera );
 		insects.update( dt, camera );
@@ -2904,8 +2900,6 @@ function frame( dt, introDt = dt ) {
 
 /* ── the cabin door ────────────────────────────────────────────────────────── */
 
-// The rig's own settings while the passage flies it, to hand back afterwards.
-let passageRig = null;
 // How long the door has been free to open, for the hint's entrance.
 let doorIdle = 0;
 // Whether the room's paintings are on the GPU yet.
@@ -2971,15 +2965,7 @@ function enterCabin() {
 	}
 
 	captureDoor();
-
-	passageRig = {
-		look: cameraRig.lookStrength,
-		shake: cameraRig.shakeStrength,
-		distance: cameraRig.cameraDistance
-	};
-
-	const fov = lensFor( viewAspect(), tuned.fov ).fov;
-	passage.enter( { position: cameraRig.basePosition, quaternion: cameraRig.baseQuaternion }, fov );
+	passage.enter();
 
 	passage.setHover( false );
 	doorHint.setHover( false );
@@ -2993,38 +2979,6 @@ function exitCabin() {
 
 	setInsideUI( false );
 	document.body.classList.remove( 'is-inside' );
-
-}
-
-/** Each frame of the walk to (or from) the door: the passage's pose, on the rig. */
-function flyPassage( pose ) {
-
-	const settle = 1 - pose.blend;
-
-	if ( ! passageRig ) passageRig = { look: cameraRig.lookStrength, shake: cameraRig.shakeStrength, distance: cameraRig.cameraDistance };
-
-	cameraRig.setAnchor( {
-		position: pose.position,
-		rotation: pose.rotation,
-		cameraDistance: passageRig.distance
-	} );
-
-	// The handheld drift and the mouse look were tuned for a camera metres away; at the
-	// doorway they would shove it about, so both fade as it closes in.
-	cameraRig.shakeStrength = passageRig.shake * ( 0.2 + 0.8 * settle );
-	cameraRig.lookStrength = passageRig.look * ( 0.3 + 0.7 * settle );
-
-	applyLens( tuned.fov, settle );
-
-}
-
-/** Back outside: the rig and the lens as they were before the door. */
-function landPassage() {
-
-	cameraRig.shakeStrength = passageRig.shake;
-	cameraRig.lookStrength = passageRig.look;
-	passageRig = null;
-	applyLens();
 
 }
 

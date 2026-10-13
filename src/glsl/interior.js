@@ -86,12 +86,14 @@ void main() {
 export const leafVert = /* glsl */`
 uniform mat4 u_captureMatrix; // capture camera's view-projection × the closed leaf's world matrix
 varying vec4 v_capture;
+varying vec3 v_local;
 varying vec3 v_normal;
 varying vec3 v_worldNormal;
 varying vec3 v_worldPosition;
 
 void main() {
 	v_capture = u_captureMatrix * vec4( position, 1.0 );
+	v_local = position;
 	v_normal = normal;
 	vec4 world = modelMatrix * vec4( position, 1.0 );
 	v_worldPosition = world.xyz;
@@ -102,20 +104,57 @@ void main() {
 
 export const leafFrag = /* glsl */`
 uniform sampler2D u_capture;
+uniform mat4 u_captureMatrix;
+uniform vec2 u_size;        // the leaf's width and height
+uniform float u_depth;      // and its thickness
 uniform vec3 u_light;       // the warm light from inside, already scaled by how open the door is
 uniform vec3 u_lightPosition;
 varying vec4 v_capture;
+varying vec3 v_local;
 varying vec3 v_normal;
 varying vec3 v_worldNormal;
 varying vec3 v_worldPosition;
+
+float grainHash( float n ) { return fract( sin( n ) * 43758.5453 ); }
 
 void main() {
 	vec2 uv = v_capture.xy / v_capture.w * 0.5 + 0.5;
 	vec3 face = texture2D( u_capture, clamp( uv, vec2( 0.001 ), vec2( 0.999 ) ) ).rgb;
 
-	// the outside face as captured; the edges and the inside face are the same wood, unlit
 	float front = step( 0.5, v_normal.z );
-	vec3 color = face * mix( 0.55, 1.0, front );
+	vec3 color = face;
+
+	if ( front < 0.5 ) {
+
+		// The door's thickness and its inside face are the same wood as the outside: its
+		// average colour, read off the capture at four plain spots of the outside face (the
+		// leaf's x runs 0..width from the hinge, its y is centred), clear of the emblem.
+		vec3 wood = vec3( 0.0 );
+		for ( int i = 0; i < 4; i ++ ) {
+			vec2 spot = vec2( i == 0 || i == 2 ? 0.2 : 0.8, i < 2 ? - 0.32 : 0.36 ) * u_size;
+			vec4 clip = u_captureMatrix * vec4( spot, 0.0, 1.0 );
+			wood += texture2D( u_capture, clamp( clip.xy / clip.w * 0.5 + 0.5, vec2( 0.001 ), vec2( 0.999 ) ) ).rgb;
+		}
+		wood *= 0.25;
+
+		float side = 1.0 - step( 0.5, - v_normal.z ); // 1 on the edges, 0 on the inside face
+		float along = side > 0.5 ? ( abs( v_normal.x ) > 0.5 ? v_local.y : v_local.x ) : v_local.y;
+		float across = side > 0.5 ? - v_local.z / u_depth : v_local.x / u_size.x;
+		float grain = 0.9 + 0.1 * sin( along * 260.0 + sin( along * 37.0 ) * 2.0 + grainHash( floor( across * 4.0 ) ) * 6.28 );
+
+		// The inside face is a plain plank door: boards with dark seams between them, and two
+		// ledges across them that catch a little more light.
+		float board = fract( v_local.x / u_size.x * 4.0 );
+		float seam = 1.0 - 0.45 * smoothstep( 0.05, 0.0, min( board, 1.0 - board ) );
+		float ledge = step( abs( abs( v_local.y / u_size.y ) - 0.3 ), 0.035 );
+		float planks = mix( seam, 1.12, ledge );
+
+		// The edges are a step darker than the outside face, with a soft shadow along the arris
+		// so the face and the edge read as one solid slab; the inside face darker again.
+		float arris = side * smoothstep( 0.0, 0.3, - v_local.z / u_depth );
+		color = wood * grain * mix( 0.55 * planks, mix( 0.9, 0.7, arris ), side );
+
+	}
 
 	// the room's light catches whatever of the leaf faces it
 	vec3 toLight = u_lightPosition - v_worldPosition;
