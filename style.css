@@ -335,7 +335,7 @@ html, body {
 
 .is-left .door-hint-lead::before { left: auto; right: -2px; }
 
-.is-shown .door-hint-lead { animation: door-lead 1.1s cubic-bezier(0.65, 0, 0.35, 1) 0.35s both; }
+.is-shown .door-hint-lead { animation: door-lead 0.9s cubic-bezier(0.65, 0, 0.35, 1) 0.1s both; }
 
 @keyframes door-lead {
 	from { transform: scaleX(0); }
@@ -371,7 +371,7 @@ html, body {
 	text-align: right;
 }
 
-.is-shown .door-hint-label { animation: door-label 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.9s both; }
+.is-shown .door-hint-label { animation: door-label 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.45s both; }
 
 @keyframes door-label {
 	from { opacity: 0; filter: blur(8px); }
@@ -430,6 +430,142 @@ html, body {
 /* ── inside the cabin ───────────────────────────────────────────────────── */
 
 .is-inside #app canvas { cursor: default; }
+
+/* the name of the shelf or the rack, hung off it like the door's invitation */
+#room-label {
+	position: fixed;
+	left: 0;
+	top: 0;
+	z-index: 10;
+	pointer-events: none;
+	--warm: 255, 214, 160;
+	--lead: clamp(26px, 3.4vw, 54px);
+	--lead-v: clamp(22px, 3vh, 40px);
+	--gap: clamp(10px, 1.4vw, 18px);
+}
+
+#room-label[hidden] { display: none; }
+
+.room-label-lead {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: var(--lead);
+	height: 1px;
+	background: linear-gradient(90deg, rgba(var(--warm), 0.95), rgba(var(--warm), 0.2));
+	transform-origin: 0 50%;
+	transform: scaleX(0);
+	transition: transform 0.35s cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.room-label-lead::before {
+	content: "";
+	position: absolute;
+	left: -2px;
+	top: -2px;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: rgb(var(--warm));
+	box-shadow: 0 0 10px 2px rgba(var(--warm), 0.7);
+}
+
+.is-left .room-label-lead {
+	left: auto;
+	right: 0;
+	transform-origin: 100% 50%;
+	background: linear-gradient(270deg, rgba(var(--warm), 0.95), rgba(var(--warm), 0.2));
+}
+
+.is-left .room-label-lead::before { left: auto; right: -2px; }
+
+.room-label-text {
+	position: absolute;
+	top: 0;
+	left: calc(var(--lead) + var(--gap));
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.35em;
+	color: #fff8ef;
+	white-space: nowrap;
+	transform: translateY(-50%);
+	text-shadow: 0 1px 18px rgba(20, 12, 4, 0.6), 0 0 2px rgba(20, 12, 4, 0.35);
+	opacity: 0;
+	filter: blur(6px);
+	transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+.is-left .room-label-text {
+	left: auto;
+	right: calc(var(--lead) + var(--gap));
+	align-items: flex-end;
+	text-align: right;
+}
+
+.room-label-kicker {
+	font: 500 10px/1 "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+	letter-spacing: 0.32em;
+	text-transform: uppercase;
+	color: rgba(255, 244, 228, 0.85);
+	margin-right: -0.32em;
+}
+
+.room-label-title {
+	font: italic 400 clamp(24px, 2.4vw, 40px)/1 "Instrument Serif", ui-serif, Georgia, serif;
+}
+
+/* on an upright screen the labels hang above the shelf and below the rack, the lead upright */
+.is-above .room-label-lead,
+.is-below .room-label-lead {
+	left: 0;
+	right: auto;
+	width: 1px;
+	height: var(--lead-v);
+	transform: scaleY(0);
+}
+
+.is-above .room-label-lead {
+	top: auto;
+	bottom: 0;
+	transform-origin: 50% 100%;
+	background: linear-gradient(0deg, rgba(var(--warm), 0.95), rgba(var(--warm), 0.2));
+}
+
+.is-below .room-label-lead {
+	transform-origin: 50% 0;
+	background: linear-gradient(180deg, rgba(var(--warm), 0.95), rgba(var(--warm), 0.2));
+}
+
+.is-above .room-label-lead::before { top: auto; bottom: -2px; left: -2px; }
+.is-below .room-label-lead::before { top: -2px; left: -2px; }
+
+.is-above .room-label-text,
+.is-below .room-label-text {
+	left: 0;
+	right: auto;
+	align-items: center;
+	text-align: center;
+	transform: translateX(-50%);
+}
+
+.is-above .room-label-text { top: auto; bottom: calc(var(--lead-v) + var(--gap)); }
+.is-below .room-label-text { top: calc(var(--lead-v) + var(--gap)); }
+
+#room-label.is-shown.is-above .room-label-lead,
+#room-label.is-shown.is-below .room-label-lead { transform: scaleY(1); }
+
+#room-label.is-shown .room-label-lead { transform: scaleX(1); transition-duration: 0.6s; }
+#room-label.is-shown .room-label-text { opacity: 1; filter: blur(0); transition: opacity 0.7s ease 0.2s, filter 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.2s; }
+
+@media (max-width: 640px) {
+	#room-label { --lead: 18px; --gap: 8px; }
+	.room-label-kicker { font-size: 9px; letter-spacing: 0.26em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.room-label-lead, .room-label-text { transition: opacity 0.3s ease !important; filter: none !important; }
+}
 
 #inside-ui {
 	position: fixed;

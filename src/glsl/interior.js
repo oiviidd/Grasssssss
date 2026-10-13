@@ -68,11 +68,14 @@ void main() {
 	float under = smoothstep( 0.0, - u_size.y * 0.5, v_local.y ); // 1 at the sill
 	float seam = exp( - abs( d ) / ( 0.0035 + 0.003 * under ) ) * ( 0.55 + 0.9 * under );
 	float halo = exp( - max( d, 0.0 ) / 0.05 ) * step( 0.0, d ) * 0.22;
+	// Below the sill is grass, not wall: a glow there floated over it. The line under the door
+	// stays, cut off just past it.
+	float aboveSill = smoothstep( - u_size.y * 0.5 - 0.006, - u_size.y * 0.5 + 0.002, v_local.y );
 
 	// breathing, never in step with itself
 	float breath = 0.82 + 0.12 * sin( u_time * 1.7 ) + 0.06 * sin( u_time * 4.1 + 1.3 );
 
-	gl_FragColor = vec4( u_color * ( seam + halo ) * u_intensity * breath, 1.0 );
+	gl_FragColor = vec4( u_color * ( seam + halo ) * aboveSill * u_intensity * breath, 1.0 );
 }
 `;
 
@@ -180,9 +183,12 @@ void main() {
  * ── THE PASSAGE ────────────────────────────────────────────────────────────────
  * Composites the graded meadow and the room. Two things happen here:
  *
- *   the doorway  — pixels the scene marked as the hole show the room, shaded as if seen
- *                  through a frame: darker in the reveal, lit toward the floor. Its light
- *                  spills onto the wall and the grass round it.
+ *   the doorway  — pixels the scene marked as the hole fill with the room's light: warm,
+ *                  hot at the middle, deeper amber pooled at the jambs like pigment at the
+ *                  edge of a wash, dust rising through it. No room is drawn in it — a painting
+ *                  pasted into the opening read as a flat picture, a modelled room as a box —
+ *                  so the room arrives only with the wash, which grows out of this light.
+ *                  The light spills onto the wall round the frame.
  *   the wash     — a watercolour bloom: a wet edge, warped by noise, spreading out from the
  *                  door. The room comes in behind it; the edge pools darker pigment, lifts the
  *                  paper just ahead of itself, and pushes the meadow along like a wave of water.
@@ -212,6 +218,40 @@ ${ noise }
 const vec3 PAPER = vec3( 0.96, 0.93, 0.86 );
 const vec3 PIGMENT = vec3( 0.70, 0.56, 0.48 );
 
+/*
+ * The light in the open doorway, in door uv. Painted like the wash it turns into: a hot
+ * paper-white core, amber round it, soft blooms of wetter colour drifting through, and the
+ * deepest pigment pooled along the frame.
+ */
+vec3 doorLight( vec2 du, float frame ) {
+
+	float aspect = u_doorAspect.x / u_doorAspect.y;
+	float flame = 0.95 + 0.035 * sin( u_time * 7.3 ) + 0.025 * sin( u_time * 13.1 + 1.7 );
+
+	vec2 q = ( du - vec2( 0.5, 0.46 ) ) * vec2( aspect, 1.0 );
+	float core = exp( - dot( q, q ) * 7.0 );
+	float bloom = fbm( du * vec2( 2.0 * aspect + 1.0, 3.0 ) + vec2( u_seed, u_time * 0.06 ) );
+
+	vec3 amber = u_lightColor * vec3( 0.95, 0.66, 0.36 );
+	vec3 hot = vec3( 1.04, 0.97, 0.86 );
+	vec3 color = mix( amber, hot, clamp( core * 1.15 + ( bloom - 0.5 ) * 0.7, 0.0, 1.0 ) );
+
+	// pigment pooled along the jambs, its edge as ragged as the wash's
+	float pool = 1.0 - smoothstep( 0.0, 0.08, frame + ( bloom - 0.5 ) * 0.04 );
+	color = mix( color, amber * 0.6, pool * 0.7 );
+
+	// dust turning in the light as it rises
+	vec2 g = vec2( du.x * aspect, du.y ) * 16.0 + vec2( 0.0, - u_time * 0.45 );
+	vec2 cell = floor( g );
+	vec2 h = hash22( cell + u_seed );
+	vec2 at = 0.25 + 0.5 * h + 0.15 * vec2( sin( u_time * 0.8 + h.y * 6.28 ), 0.0 );
+	float mote = step( 0.55, hash12( cell + 4.1 ) ) * smoothstep( 0.12, 0.0, length( fract( g ) - at ) );
+	color += hot * mote * 0.35 * ( 0.4 + core );
+
+	return color * flame;
+
+}
+
 void main() {
 
 	/* the meadow, and the room through the doorway ------------------------------ */
@@ -238,7 +278,8 @@ void main() {
 
 	float room = 1.0 - smoothstep( - 0.006, 0.006, edge );
 	float rim = room * ( 1.0 - smoothstep( 0.0, 0.07, - edge ) );        // just inside the edge
-	float wet = ( 1.0 - room ) * ( 1.0 - smoothstep( 0.0, 0.14, edge ) ); // just ahead of it
+	// just ahead of it; it comes with the bloom, or it lights the grass under the door first
+	float wet = ( 1.0 - room ) * ( 1.0 - smoothstep( 0.0, 0.14, edge ) ) * smoothstep( 0.04, 0.3, grow );
 
 	// the water front shoves the meadow outward as it comes
 	vec2 push = normalize( p + 1e-5 ) / vec2( u_aspect, 1.0 );
@@ -253,22 +294,12 @@ void main() {
 		float hole = 1.0 - sceneTexel.a;
 
 		float frame = min( min( du.x, 1.0 - du.x ) * u_doorAspect.x, min( du.y, 1.0 - du.y ) * u_doorAspect.y ) / u_doorAspect.y;
-		float shade = mix( 0.45, 1.0, smoothstep( 0.0, 0.16, frame ) );
-		shade *= mix( 0.75, 1.0, smoothstep( 1.0, 0.55, du.y ) );
-		// The room through the doorway, framed by it: its full height fills the opening and as
-		// much of its width as the opening's shape allows, round the rack. Sampled in screen
-		// space instead, a doorway a fifth of the frame showed a fifth of the room, blown up.
-		// It slides a little with where the door is on screen, as a room behind it would.
-		vec2 room = vec2(
-			0.5 + ( du.x - 0.5 ) * u_doorAspect.x / u_doorAspect.y / u_aspect * 0.92 - ( u_origin.x - 0.5 ) * 0.12,
-			0.04 + du.y * 0.92 );
-		vec3 view = texture2D( u_inside, clamp( room, vec2( 0.001 ), vec2( 0.999 ) ) ).rgb;
-		vec3 through = view * shade * mix( 0.5, 1.3, u_doorOpen ) + u_lightColor * 0.18 * u_doorOpen * smoothstep( 0.7, 0.0, du.y );
+		// the light comes up as the door opens, from the dark of the gap
+		vec3 through = doorLight( clamp( du, 0.0, 1.0 ), frame ) * mix( 0.25, 1.0, smoothstep( 0.0, 0.6, u_doorOpen ) );
 
-		// light spilled on the wall and the grass round the frame, strongest below the sill
-		float sill = smoothstep( 0.04, - 0.06, du.y ) * smoothstep( - 0.35, 0.15, du.x ) * smoothstep( 1.35, 0.85, du.x );
-		float spill = exp( - away * 7.0 ) * ( 1.0 + 1.2 * sill * exp( - away * 2.0 ) );
-		meadow += u_lightColor * spill * u_doorOpen * 0.22 * ( 1.0 - hole );
+		// light spilled on the wall round the frame; none low down, where the grass stands in front
+		float spill = ( exp( - away * 9.0 ) * 0.7 + exp( - away * 3.0 ) * 0.3 ) * smoothstep( 0.03, 0.16, du.y );
+		meadow += u_lightColor * spill * u_doorOpen * 0.3 * ( 1.0 - hole );
 
 		meadow = mix( meadow, through, hole );
 
@@ -311,6 +342,10 @@ void main() {
  *
  * u_wash renders it as wet watercolour — blurred, bled, its edges darkened, its grain
  * lifted — and dries it back to the painting as it falls to 0.
+ *
+ * The shelf and the rack answer the pointer (u_hot, one per hotspot): the one under it swells
+ * toward you a touch and warms as if a lamp had turned to it, a band of light runs across it
+ * once, and the rest of the room steps back into shadow. A click flashes it (u_press).
  */
 export const interiorFrag = /* glsl */`
 uniform sampler2D u_day;
@@ -326,6 +361,14 @@ uniform vec2 u_focus;         // image uv the crop centres on
 uniform float u_zoom;
 uniform float u_wash;
 uniform float u_gust;
+uniform vec2 u_hang;          // image rows the coats hang over, top to hem (0 at the top)
+uniform float u_horizon;      // the image row where the sky in the windows meets the meadow
+uniform sampler2D u_hotMask;  // r shelf, g rack
+uniform vec2 u_hot;           // how hovered each is, 0..1
+uniform vec2 u_press;         // the flash of a click on each
+uniform vec2 u_hotCentre[ 2 ];
+uniform float u_sweep;        // the band of light's run across the hovered one, 0..1
+uniform float u_glint;        // a bigger glint on the same run, to show it can be touched, 1 falling to 0
 
 varying vec2 v_uv;
 
@@ -370,22 +413,28 @@ void main() {
 	vec2 uv = focus + ( v_uv - 0.5 ) * span;
 
 	vec3 mask = texture2D( u_mask, uv ).rgb;
+
+	// the hovered thing swells toward its middle, as if leaning out of the wall
+	vec2 hotAt = texture2D( u_hotMask, uv ).rg;
+	float lift = hotAt.r * u_hot.x + hotAt.g * u_hot.y;
+	vec2 toward = ( u_hotCentre[ 0 ] * hotAt.r * u_hot.x + u_hotCentre[ 1 ] * hotAt.g * u_hot.y ) / max( lift, 1e-4 );
+	uv -= ( uv - toward ) * 0.02 * lift;
 	float down = 1.0 - uv.y; // image rows, 0 at the top
 
 	// depth: near things slide with the eye, the view out of the windows against it
-	uv -= u_parallax * ( mask.r - 0.42 ) * 0.014 * span;
+	uv -= u_parallax * ( mask.r - 0.42 ) * 0.011 * span;
 
 	// cloth swaying from the hangers, more for a while once the door has let the air in
-	float hang = pow( smoothstep( 0.47, 1.0, down ), 1.3 );
+	float hang = pow( smoothstep( u_hang.x, u_hang.y, down ), 1.3 );
 	float sway = sin( t * 0.9 + uv.x * 11.0 ) * 0.6 + sin( t * 1.37 + uv.x * 23.0 + 1.3 ) * 0.4;
 	sway += ( vnoise( vec2( uv.x * 6.0, t * 0.5 ) ) - 0.5 ) * 1.2 * u_gust;
 	uv.x += sway * ( 0.0009 + 0.0035 * u_gust ) * hang * mask.g;
 
 	// the view outside: the sky drifts, the grass moves in the wind
-	float meadow = smoothstep( 0.40, 0.50, down );
+	float meadow = smoothstep( u_horizon - 0.05, u_horizon + 0.05, down );
 	vec2 flow = vec2( vnoise( uv * vec2( 14.0, 9.0 ) + vec2( t * 0.08, 0.0 ) ), vnoise( uv * vec2( 14.0, 9.0 ) + 17.0 - t * 0.05 ) ) - 0.5;
 	uv += flow * 0.0022 * mask.b * ( 1.0 - meadow );
-	uv.x += sin( t * 1.9 + uv.y * 150.0 + vnoise( uv * 40.0 + t * 0.5 ) * 4.0 ) * 0.0007 * meadow * mask.b * smoothstep( 0.4, 0.58, down );
+	uv.x += sin( t * 1.9 + uv.y * 150.0 + vnoise( uv * 40.0 + t * 0.5 ) * 4.0 ) * 0.0007 * meadow * mask.b * smoothstep( u_horizon - 0.05, u_horizon + 0.13, down );
 
 	// wet: bled sideways by the water, blurred
 	uv += ( vec2( fbm( uv * 5.0 + t * 0.12 ), fbm( uv * 5.0 + 7.3 - t * 0.1 ) ) - 0.5 ) * 0.03 * u_wash;
@@ -426,13 +475,13 @@ void main() {
 	// after dark: stars in the window sky, fireflies over its grass
 	if ( u_weights.z > 0.001 ) {
 
-		vec2 sq = uv * vec2( 150.0, 85.0 );
+		vec2 sq = uv * vec2( 85.0 * u_imageAspect, 85.0 );
 		vec2 cell = floor( sq );
 		float star = step( 0.93, hash12( cell ) ) * smoothstep( 0.18, 0.0, length( fract( sq ) - 0.5 ) );
 		star *= 0.5 + 0.5 * sin( t * ( 1.5 + hash12( cell + 1.0 ) * 3.0 ) + hash12( cell + 2.0 ) * 6.28 );
 		color += vec3( 0.85, 0.9, 1.0 ) * star * mask.b * ( 1.0 - meadow ) * smoothstep( 0.3, 0.1, lum ) * u_weights.z * 0.8;
 
-		vec2 fq = uv * vec2( 40.0, 22.0 ) + vec2( t * 0.06, sin( t * 0.3 ) * 0.2 );
+		vec2 fq = uv * vec2( 22.0 * u_imageAspect, 22.0 ) + vec2( t * 0.06, sin( t * 0.3 ) * 0.2 );
 		vec2 fcell = floor( fq );
 		vec2 fh = hash22( fcell );
 		vec2 fc = 0.3 + 0.4 * fh + 0.2 * vec2( sin( t * 0.7 + fh.x * 6.28 ), cos( t * 0.9 + fh.y * 6.28 ) );
@@ -441,6 +490,31 @@ void main() {
 		color += vec3( 0.85, 1.0, 0.45 ) * fly * mask.b * meadow * u_weights.z * 0.9;
 
 	}
+
+	// the hotspot: the room steps back, the hovered thing warms, light runs across it
+	float press = hotAt.r * u_press.x + hotAt.g * u_press.y;
+	float hovering = max( u_hot.x, u_hot.y );
+	// the rest steps back, more the farther it is from the hovered thing
+	vec2 hotMid = u_hot.x > u_hot.y ? u_hotCentre[ 0 ] : u_hotCentre[ 1 ];
+	float far = smoothstep( 0.15, 0.6, length( ( uv - hotMid ) * vec2( u_imageAspect, 1.0 ) ) );
+	color *= 1.0 - hovering * ( 1.0 - lift ) * ( 0.22 + 0.2 * far );
+	color = mix( color, color * vec3( 1.26, 1.12, 0.94 ), lift );
+	float across = uv.x + ( 1.0 - uv.y ) * 0.35;
+	float band = exp( - pow( ( across - mix( 0.1, 1.25, u_sweep ) ) * 14.0, 2.0 ) );
+	float shine = band * lift * smoothstep( 0.12, 0.6, lum );
+	// a glint: the band brighter, with a hot thin core and sparks caught on the highlights
+	float core = exp( - pow( ( across - mix( 0.1, 1.25, u_sweep ) ) * 60.0, 2.0 ) );
+	vec2 sq = uv * vec2( u_imageAspect, 1.0 ) * 70.0;
+	vec2 cell = floor( sq );
+	vec2 off = fract( sq ) - 0.25 - hash22( cell ) * 0.5;
+	// small four-pointed stars that blink as the band passes
+	float star = max( smoothstep( 0.08, 0.0, length( off ) ),
+		smoothstep( 0.035, 0.0, abs( off.x ) ) * smoothstep( 0.3, 0.0, abs( off.y ) ) * 0.6 +
+		smoothstep( 0.035, 0.0, abs( off.y ) ) * smoothstep( 0.3, 0.0, abs( off.x ) ) * 0.6 );
+	float sparks = step( 0.86, hash12( cell + 7.0 ) ) * star * ( 0.5 + 0.5 * sin( t * 14.0 + hash12( cell ) * 6.28 ) );
+	float glint = u_glint * lift * ( 0.4 + 0.6 * smoothstep( 0.05, 0.5, lum ) ) *
+		( band * 0.75 + core * 0.9 + band * sparks * 1.6 );
+	color += vec3( 1.0, 0.86, 0.62 ) * ( shine * 0.42 + press * ( 0.18 + 0.3 * lum ) ) + vec3( 1.0, 0.93, 0.8 ) * glint;
 
 	// a soft vignette, and dither
 	vec2 centred = ( v_uv - 0.5 ) * vec2( screenAspect, 1.0 );

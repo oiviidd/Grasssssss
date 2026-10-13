@@ -41,28 +41,27 @@ const LEAF_DEPTH = 0.022;
  *   unlatch → swing   the leaf gives, then swings out
  *   wash              the watercolour takes the screen, once the door stands open
  *   dry               the room's wash dries back into the painting
- * Coming out runs on its own clock (LEAVE): the wash drains back first, then the door shuts.
+ * Coming out runs on its own clock (LEAVE): the wash drains back into a door already shut —
+ * the meadow comes back with the door closed, never standing open.
  */
 const ENTER = {
 	unlatch: 0.22,
 	swing: [ 0.22, 1.55 ],
 	wash: [ 1.15, 3.05 ],
-	dry: [ 2.2, 4.6 ],
-	done: 3.1
+	dry: [ 2.1, 3.5 ],
+	done: 3.5
 };
 
 const LEAVE = {
 	wet: [ 0.0, 0.6 ],
 	wash: [ 0.1, 1.9 ],
-	close: [ 1.6, 2.8 ],
-	done: 2.9
+	done: 2.0
 };
 
 const clamp01 = t => Math.min( 1, Math.max( 0, t ) );
 const span = ( t, [ a, b ] ) => clamp01( ( t - a ) / ( b - a ) );
 const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow( - 2 * t + 2, 3 ) / 2;
 const easeInOutSine = t => - ( Math.cos( Math.PI * t ) - 1 ) / 2;
-const easeOutCubic = t => 1 - Math.pow( 1 - t, 3 );
 
 /** Adds colour, leaves the alpha as it was — the doorway's 0 must survive what is drawn over it. */
 function additiveKeepAlpha( material ) {
@@ -340,7 +339,8 @@ export class Passage {
 	_setOpen( open ) {
 
 		this.open = open;
-		const swinging = this.state !== 'outside' && this.state !== 'inside';
+		// Only going in: coming out, the model's own closed door is what shows.
+		const swinging = this.state === 'entering';
 		if ( this.leaf ) {
 
 			this.leaf.rotation.y = - SWING * open; // outward
@@ -387,7 +387,7 @@ export class Passage {
 		this.composeMaterial.uniforms.u_seed.value = Math.random() * 50;
 		this.interior.wash = 1;
 		this.interior.gust = 1;
-		this.interior.zoom = BASE_ZOOM;
+		this.interior.zoom = BASE_ZOOM + 0.06;
 		this._setOpen( 0 );
 		return true;
 
@@ -401,7 +401,8 @@ export class Passage {
 		this.time = 0;
 		this.composeMaterial.uniforms.u_seed.value = Math.random() * 50;
 		this._zoomFrom = this.interior.zoom;
-		this._setOpen( 1 );
+		this.glow = GLOW_REST;
+		this._setOpen( 0 );
 		return true;
 
 	}
@@ -412,7 +413,7 @@ export class Passage {
 		const interior = this.interior;
 
 		// the door light: breathing at rest, brighter under the pointer, flaring as it opens
-		const target = this.state === 'outside' ? ( this.hover ? GLOW_HOVER : GLOW_REST ) : GLOW_OPEN;
+		const target = this.state === 'entering' ? GLOW_OPEN : this.hover && this.state === 'outside' ? GLOW_HOVER : GLOW_REST;
 		this.glow += ( target - this.glow ) * ( 1 - Math.exp( - dt * 5 ) );
 		this.lightMaterial.uniforms.u_intensity.value = this.glow;
 		if ( this.light ) this.light.visible = this.state !== 'inside';
@@ -425,6 +426,8 @@ export class Passage {
 		if ( this.state === 'inside' ) {
 
 			interior.gust *= Math.exp( - dt * 0.5 );
+			interior.wash = 0;
+			interior.zoom = BASE_ZOOM;
 			return;
 
 		}
@@ -449,8 +452,8 @@ export class Passage {
 			// takes the screen, then dries.
 			const wet = 0.25 + 0.75 * easeInOutSine( span( t, [ ENTER.wash[ 0 ] - 0.2, ENTER.wash[ 0 ] + 0.4 ] ) );
 			interior.wash = wet * ( 1 - easeInOutSine( span( t, ENTER.dry ) ) );
-			// the room drifts in a little as it comes, and settles
-			interior.zoom = BASE_ZOOM + 0.08 * easeOutCubic( clamp01( ( t - ENTER.wash[ 0 ] ) / 4 ) );
+			// the room comes in a touch close and eases back out to its full frame as it dries
+			interior.zoom = BASE_ZOOM + 0.06 * ( 1 - easeInOutSine( span( t, [ ENTER.wash[ 0 ], ENTER.done ] ) ) );
 
 			if ( t >= ENTER.done ) this._arrive();
 			return;
@@ -470,7 +473,6 @@ export class Passage {
 		interior.wash = Math.max( interior.wash, 0.75 * easeInOutSine( span( t, LEAVE.wet ) ) );
 		this.progress = 1 - easeInOutSine( span( t, LEAVE.wash ) );
 		interior.zoom = this._zoomFrom + ( BASE_ZOOM - this._zoomFrom ) * easeInOutSine( span( t, LEAVE.wash ) );
-		this._setOpen( 1 - easeInOutCubic( span( t, LEAVE.close ) ) );
 
 		if ( t >= LEAVE.done ) this._leave();
 

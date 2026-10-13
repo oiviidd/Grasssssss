@@ -80,6 +80,13 @@ export class Intro {
 
 	}
 
+	/** Done, or as good as: the flight's last stretch, when the camera is all but in place. */
+	get landing() {
+
+		return ! this.active || ( this.state === 'flight' && this.time > this.config.flight * 0.82 );
+
+	}
+
 	/** From the top: back in the grass, title revealing again. */
 	start() {
 

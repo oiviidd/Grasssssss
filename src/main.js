@@ -41,6 +41,8 @@ import { Intro, waitForTitleFonts } from './Intro.js';
 import { Interior } from './Interior.js';
 import { Passage } from './Passage.js';
 import { DoorHint } from './DoorHint.js';
+import { RoomLabel } from './RoomLabel.js';
+import { Tilt } from './Tilt.js';
 import { SHOT, INTRO, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
 import { pickFile, parseGLB, parseGLBWithMap, preloadDecoder, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
@@ -329,6 +331,16 @@ const interior = new Interior();
 const passage = new Passage( interior, uniforms );
 const doorHint = new DoorHint( document.getElementById( 'door-hint' ), () => enterCabin() );
 const insideUI = document.getElementById( 'inside-ui' );
+const roomLabel = new RoomLabel( document.getElementById( 'room-label' ) );
+// The shelf or the rack under the pointer (or last tapped), and how long a tap's label stays.
+let roomSpot = null;
+let roomSpotHold = 0;
+// On a touch screen, with no hover to find them by, the shelf and the rack glint and are named
+// in turn on the way in — until one has been tapped, after which they are known. -1 when off.
+let roomTour = - 1;
+let roomTapped = false;
+// a phone's gyroscope moves the room as the mouse does on a desktop
+const tilt = new Tilt();
 const loadInterior = () => interior.preload( file => loadTexture( file, { root: '' } ) );
 
 /**
@@ -2493,6 +2505,10 @@ function bindInput() {
 		if ( passage.state === 'inside' ) {
 
 			roomDrag = event.pointerType === 'mouse' ? null : event.clientX;
+			roomDown = { x: event.clientX, y: event.clientY };
+			// a touch takes over from the tour
+			if ( roomTour >= 0 ) endRoomTour();
+			if ( event.pointerType !== 'mouse' ) tilt.request();
 			return;
 
 		}
@@ -2511,6 +2527,7 @@ function bindInput() {
 			if ( event.pointerType === 'mouse' ) {
 
 				interior.setPointer( event.clientX / window.innerWidth * 2 - 1, - ( event.clientY / window.innerHeight * 2 - 1 ) );
+				setRoomSpot( interior.pick( event.clientX / window.innerWidth, event.clientY / window.innerHeight ) );
 
 			} else if ( roomDrag !== null ) {
 
@@ -2533,9 +2550,27 @@ function bindInput() {
 	} );
 
 	let roomDrag = null;
-	const endRoomDrag = () => { roomDrag = null; };
-	canvasEl.addEventListener( 'pointerup', endRoomDrag );
+	let roomDown = null;
+	const endRoomDrag = () => { roomDrag = null; roomDown = null; };
+	canvasEl.addEventListener( 'pointerup', event => {
+
+		// a click or tap that did not turn into a drag picks the shelf or the rack
+		if ( passage.state === 'inside' && roomDown && Math.hypot( event.clientX - roomDown.x, event.clientY - roomDown.y ) < 10 ) {
+
+			const id = interior.pick( event.clientX / window.innerWidth, event.clientY / window.innerHeight );
+			if ( id ) selectRoomSpot( id, event.pointerType !== 'mouse' );
+
+		}
+
+		endRoomDrag();
+
+	} );
 	canvasEl.addEventListener( 'pointercancel', endRoomDrag );
+	canvasEl.addEventListener( 'pointerleave', event => {
+
+		if ( event.pointerType === 'mouse' && passage.state === 'inside' ) setRoomSpot( null );
+
+	} );
 
 	insideUI.querySelector( '.inside-back' ).addEventListener( 'click', () => exitCabin() );
 
@@ -2902,6 +2937,8 @@ function frame( dt, introDt = dt ) {
 
 // How long the door has been free to open, for the hint's entrance.
 let doorIdle = 0;
+// taken while the opening flight was landing: the door opens the moment it has
+let doorQueued = false;
 // Whether the room's paintings are on the GPU yet.
 let interiorWarm = false;
 
@@ -2952,6 +2989,19 @@ function captureDoor() {
 
 function enterCabin() {
 
+	// from the tap on the door, which is when a phone may ask for its gyroscope
+	tilt.request();
+	tilt.recentre();
+
+	// the hint shows as the opening flight lands; taken then, it waits for the camera
+	if ( intro.active && intro.landing ) {
+
+		doorQueued = true;
+		return;
+
+	}
+
+	doorQueued = false;
 	if ( ! doorOpenable() ) return;
 
 	// The paintings are usually in long before anyone reaches the door; if not, the door
@@ -2977,8 +3027,85 @@ function exitCabin() {
 
 	if ( ! passage.exit() ) return;
 
+	endRoomTour();
+	setRoomSpot( null );
+
 	setInsideUI( false );
 	document.body.classList.remove( 'is-inside' );
+
+}
+
+/** The shelf or the rack lit and named, or neither. */
+function setRoomSpot( id ) {
+
+	roomSpotHold = 0;
+	if ( id === roomSpot ) return;
+	roomSpot = id;
+	interior.setHover( id );
+	roomLabel.show( id );
+	renderer.domElement.style.cursor = id ? 'pointer' : '';
+
+}
+
+/**
+ * The shelf or the rack clicked or tapped: it flashes and is named, and `cabin-select` goes
+ * out on window with { id } for whatever it should open. On touch, with no hover to hold it,
+ * the light and the name stay a few seconds.
+ */
+function selectRoomSpot( id, touch ) {
+
+	setRoomSpot( id );
+	if ( touch ) roomSpotHold = 2.8;
+	roomTapped = true;
+	interior.press( id );
+	window.dispatchEvent( new CustomEvent( 'cabin-select', { detail: { id } } ) );
+
+}
+
+/*
+ * The tour: each hotspot glints, then its name comes in, then the next. Times in seconds from
+ * the room's arrival.
+ */
+const ROOM_TOUR = [
+	{ at: 0.35, glint: 'shelf' },
+	{ at: 0.9, label: 'shelf' },
+	{ at: 3.0, glint: 'rack' },
+	{ at: 3.55, label: 'rack' },
+	{ at: 6.0, end: true }
+];
+
+function updateRoomTour( dt ) {
+
+	const from = roomTour;
+	roomTour += dt;
+	ROOM_TOUR.forEach( step => {
+
+		if ( step.at <= from || step.at > roomTour ) return;
+		if ( step.glint ) {
+
+			// the last name goes as the next one lights
+			roomSpot = null;
+			roomLabel.show( null );
+			interior.glint( step.glint );
+
+		} else if ( step.label ) {
+
+			roomSpot = step.label;
+			roomLabel.show( step.label );
+
+		} else endRoomTour();
+
+	} );
+
+}
+
+function endRoomTour() {
+
+	if ( roomTour < 0 ) return;
+	roomTour = - 1;
+	roomSpot = null;
+	roomLabel.show( null );
+	interior.setHover( null );
 
 }
 
@@ -2998,9 +3125,10 @@ function setInsideUI( on ) {
 /** The hint, the room's light, and the hand-over between outside and in. */
 function updateDoor( dt ) {
 
-	// The hint comes once the opening is over and the door has been free a moment.
-	doorIdle = doorOpenable() ? doorIdle + dt : 0;
-	const hint = doorIdle > 1.4;
+	// The hint comes in as the opening flight lands, so it is there the moment the door is.
+	doorIdle = passage.canEnter && intro.landing && cabin.wall ? doorIdle + dt : 0;
+	const hint = doorIdle > 0.05;
+	if ( doorQueued && doorOpenable() ) enterCabin();
 	doorHint.show( hint );
 
 	if ( hint ) {
@@ -3014,7 +3142,17 @@ function updateDoor( dt ) {
 
 	if ( passage.state !== 'outside' ) {
 
+		if ( tilt.active ) interior.setTilt( tilt.x, tilt.y );
 		interior.update( dt );
+		if ( roomTour >= 0 ) updateRoomTour( dt );
+
+		if ( roomSpot ) roomLabel.place( interior.anchor( roomSpot ) );
+		if ( roomSpotHold > 0 ) {
+
+			roomSpotHold -= dt;
+			if ( roomSpotHold <= 0 ) setRoomSpot( null );
+
+		}
 
 	} else if ( interior.ready && ! interiorWarm && ! intro.active ) {
 
@@ -3031,6 +3169,7 @@ function updateDoor( dt ) {
 		document.body.classList.add( 'is-inside' );
 		doorHint.setKnown();
 		setInsideUI( true );
+		if ( ! roomTapped && window.matchMedia( '(hover: none)' ).matches ) roomTour = 0;
 
 	}
 
