@@ -198,6 +198,7 @@ const inside = ( [ x, y ], poly ) => {
 };
 
 const clamp = ( x, a, b ) => Math.min( b, Math.max( a, x ) );
+const easeInOut = x => x * x * ( 3 - 2 * x );
 const smoothstep = ( a, b, x ) => {
 
 	const t = clamp( ( x - a ) / ( b - a ), 0, 1 );
@@ -319,6 +320,12 @@ export class Interior {
 		this.wash = 0;
 		this.gust = 0;
 		this.zoom = BASE_ZOOM;
+		// The room stepping aside for the shop: 0..1, eased, how far it has leaned in toward
+		// one hotspot and slid it to a point on screen (setAside).
+		this.aside = 0;
+		this._asideTarget = 0;
+		this._asideId = null;
+		this._asideAt = [ 0.5, 0.5 ];
 		this.weights = new THREE.Vector3( 1, 0, 0 );
 
 		this.pointer = new THREE.Vector2();
@@ -467,6 +474,29 @@ export class Interior {
 
 	}
 
+	/**
+	 * Leans the room in toward a hotspot and slides it to `at` on screen (0..1, y down) — to
+	 * sit it beside the shop's panel — or back with null.
+	 */
+	setAside( id, at ) {
+
+		this._asideTarget = id ? 1 : 0;
+		if ( id ) {
+
+			this._asideId = id;
+			this._asideAt = at;
+
+		}
+
+	}
+
+	/** The zoom the room is drawn at: the passage's, leaned in by the aside. */
+	get viewZoom() {
+
+		return this.zoom * ( 1 + 0.1 * easeInOut( this.aside ) );
+
+	}
+
 	/** The crop the shader shows: how much of the picture spans the screen, and its middle. */
 	_crop() {
 
@@ -474,8 +504,9 @@ export class Interior {
 		const resolution = u.u_resolution.value;
 		const screenAspect = resolution.x / resolution.y;
 		const imageAspect = u.u_imageAspect.value;
-		const sx = ( screenAspect > imageAspect ? 1 : screenAspect / imageAspect ) / this.zoom;
-		const sy = ( screenAspect > imageAspect ? imageAspect / screenAspect : 1 ) / this.zoom;
+		const zoom = this.viewZoom;
+		const sx = ( screenAspect > imageAspect ? 1 : screenAspect / imageAspect ) / zoom;
+		const sy = ( screenAspect > imageAspect ? imageAspect / screenAspect : 1 ) / zoom;
 		const focus = u.u_focus.value;
 		return {
 			sx, sy,
@@ -578,6 +609,19 @@ export class Interior {
 		const wander = ( 1 - span ) * 0.22 * Math.sin( t * 0.06 );
 		u.u_focus.value.set( 0.5 + wander + this.pan * ( 1 - span ) * 0.5, 0.52 );
 
+		// stepping aside: the hotspot's middle eased toward its place beside the panel
+		this.aside += ( this._asideTarget - this.aside ) * ( 1 - Math.exp( - dt * 3.2 ) );
+		if ( this.aside > 1e-3 && this._asideId && this.set ) {
+
+			const { sx, sy } = this._crop();
+			const [ cx, cy ] = this.set.hotspots[ this._asideId ].centre;
+			const [ ax, ay ] = this._asideAt;
+			const k = easeInOut( this.aside );
+			u.u_focus.value.x += ( cx - ( ax - 0.5 ) * sx - u.u_focus.value.x ) * k;
+			u.u_focus.value.y += ( 1 - cy - ( 0.5 - ay ) * sy - u.u_focus.value.y ) * k;
+
+		}
+
 		// hover eases in and out; the press flash falls away; the sweep runs once
 		const hoverEase = 1 - Math.exp( - dt * 7 );
 		HOTSPOT_IDS.forEach( ( id, i ) => {
@@ -593,7 +637,7 @@ export class Interior {
 		u.u_glint.value = this._glint;
 
 		u.u_time.value = t;
-		u.u_zoom.value = this.zoom;
+		u.u_zoom.value = this.viewZoom;
 		u.u_wash.value = this.wash;
 		u.u_gust.value = this.gust;
 

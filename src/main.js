@@ -43,6 +43,8 @@ import { Passage } from './Passage.js';
 import { DoorHint } from './DoorHint.js';
 import { RoomLabel } from './RoomLabel.js';
 import { Tilt } from './Tilt.js';
+import { Bag } from './shop/Bag.js';
+import { Shop } from './shop/Shop.js';
 import { SHOT, INTRO, INSECTS, GRASS, FOG, MOUNTAIN, MOUNTAIN_BLOCKOUT, CABIN, CABIN_BLOCKOUT, RESPONSIVE } from './shot.js';
 import { TweakPanel } from './TweakPanel.js';
 import { pickFile, parseGLB, parseGLBWithMap, preloadDecoder, normaliseProp, ensureYRatio, loadImageTexture, exportGeometryGLB, exportTexturePNG } from './AssetIO.js';
@@ -347,6 +349,47 @@ let roomTour = - 1;
 let roomTapped = false;
 // a phone's gyroscope moves the room as the mouse does on a desktop
 const tilt = new Tilt();
+
+// The shop: the shelf and the rack open their collections in a panel, and the bag is kept
+// in this browser. While a collection is showing, its hotspot stays lit and the room leans
+// in and steps aside so the thing sits beside the panel.
+const bag = new Bag();
+let shopSpot = null;
+const shop = new Shop( document.getElementById( 'shop' ), document.getElementById( 'bag-button' ), bag, {
+	onCollection: id => {
+
+		shopSpot = id;
+		if ( id ) endRoomTour();
+		interior.setHover( roomSpot || id );
+		interior.setAside( id, id ? asideTarget() : null );
+
+	}
+} );
+
+/** Where the shown hotspot's middle should sit on screen: in the room the panel leaves. */
+function asideTarget() {
+
+	const rect = shop.sheet.getBoundingClientRect();
+	if ( shop.root.classList.contains( 'is-sheet' ) ) return [ 0.5, Math.max( 0.04, rect.top / 2 / window.innerHeight ) ];
+	return [ rect.left / 2 / window.innerWidth, 0.42 ];
+
+}
+
+/** A hotspot's middle on screen, in CSS pixels: where its collection pours out of. */
+function spotOrigin( id ) {
+
+	const [ x, y ] = interior.toScreen( ...interior.set.hotspots[ id ].centre );
+	return { x: x * window.innerWidth, y: y * window.innerHeight };
+
+}
+
+window.addEventListener( 'cabin-select', event => {
+
+	const id = event.detail.id;
+	if ( shop.isOpen && shop.view && shop.view.type === 'collection' && shop.view.id === id ) return;
+	shop.open( { type: 'collection', id }, { origin: spotOrigin( id ) } );
+
+} );
 const loadInterior = () => interior.preload( file => loadTexture( file, { root: '' } ) );
 
 /**
@@ -2424,13 +2467,16 @@ function bindInput() {
 	window.addEventListener( 'keydown', event => {
 
 		if ( isTypingTarget( event.target ) ) return;
+		// keys pressed in the shop are the shop's
+		if ( event.target.closest && event.target.closest( '#shop' ) ) return;
 
 		intro.skip();
 
 		const key = event.key.toLowerCase();
 
-		// Escape leaves the cabin, for everyone.
-		if ( key === 'escape' && passage.state === 'inside' ) exitCabin();
+		// Escape closes the shop, or leaves the cabin, for everyone.
+		if ( key === 'escape' && shop.isOpen ) shop.close();
+		else if ( key === 'escape' && passage.state === 'inside' ) exitCabin();
 
 		if ( key === ' ' ) {
 
@@ -2507,6 +2553,14 @@ function bindInput() {
 
 		if ( event.button !== 0 ) return;
 
+		// Outside, a click on the meadow while the bag is open just closes it.
+		if ( shop.isOpen && passage.state === 'outside' ) {
+
+			shop.close();
+			return;
+
+		}
+
 		// In the room, a drag pans a narrow screen across the painting.
 		if ( passage.state === 'inside' ) {
 
@@ -2564,6 +2618,8 @@ function bindInput() {
 
 			const id = interior.pick( event.clientX / window.innerWidth, event.clientY / window.innerHeight );
 			if ( id ) selectRoomSpot( id, event.pointerType !== 'mouse' );
+			// the room beside the open shop, clicked: back to the room
+			else if ( shop.isOpen ) shop.close();
 
 		}
 
@@ -3044,6 +3100,7 @@ function exitCabin() {
 	if ( ! passage.exit() ) return;
 
 	endRoomTour();
+	shop.close();
 	setRoomSpot( null );
 
 	setInsideUI( false );
@@ -3057,7 +3114,8 @@ function setRoomSpot( id ) {
 	roomSpotHold = 0;
 	if ( id === roomSpot ) return;
 	roomSpot = id;
-	interior.setHover( id );
+	// with a collection open, its hotspot stays lit when the pointer leaves it
+	interior.setHover( id || shopSpot );
 	roomLabel.show( id );
 	renderer.domElement.style.cursor = id ? 'pointer' : '';
 
@@ -3146,6 +3204,7 @@ function updateDoor( dt ) {
 	const hint = doorIdle > 0.05;
 	if ( doorQueued && doorOpenable() ) enterCabin();
 	doorHint.show( hint );
+	if ( intro.landing ) shop.showButton();
 
 	if ( hint ) {
 

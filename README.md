@@ -186,21 +186,50 @@ meadow returns with the door closed — it is never seen standing open on the wa
 - Hotspots — the shelf and the rack, traced round their silhouettes in each set
   (`SETS.*.hotspots` in `src/Interior.js`, in that painting's own 0..1 coordinates). Under the mouse one swells a touch and warms, a band of
   light runs across it and the rest of the room dims; `src/RoomLabel.js` names it beside it.
-  A click or tap flashes it and fires `cabin-select` on `window` with `{ id: 'shelf' | 'rack' }`
-  — nothing listens yet. On touch the light and the name hold for a few seconds. On an
+  A click or tap flashes it and fires `cabin-select` on `window` with `{ id: 'shelf' | 'rack' }`,
+  which opens that collection in the shop (below). On touch the light and the name hold for a few seconds. On an
   upright screen the names hang above the shelf and below the rack. New paintings need the
   polygons and masks redrawn.
 - On a touch screen (`(hover: none)`) there is no hover to find them by, so on the way in
   the shelf and then the rack glint — a brighter band with a hot core and blinking stars —
   and their names come in after (`ROOM_TOUR` in `src/main.js`). A touch cuts it short; once
   either has been tapped it stops showing.
-- A phone's gyroscope stands in for the mouse's parallax (`src/Tilt.js`): tilt from the way
-  the phone is held, ±18° to the edge, with that rest pose slowly following the hand. iOS
-  asks permission, which is requested from the tap on the door (and again from a tap in the
-  room if that was refused); without it the room just drifts as before.
+- A phone's gyroscope stands in for the mouse look, outside and in (`src/Tilt.js`), done as
+  the original site does it: the phone's whole orientation as a quaternion, followed by a
+  quick eased copy and a slow one behind it; the turn between the two turns the meadow's
+  camera (`CameraRig.setTilt`, `tiltStrength` of it) and moves the room's parallax. A tilt
+  shows at once and, held, eases back, so the phone can be held any way. Android reports
+  orientation without asking, so it starts with the page; iOS asks, only from the end of a
+  tap, so every lifted finger asks until it is answered. Both need HTTPS.
 - The portrait set came from three separately generated pictures; sunset and night were
   warped onto day (a global scale and offset, then a smooth cubic field fitted to block
   matches on their edges) so the three line up and cross-fade without ghosting.
+
+## The shop
+
+The shelf and the rack open their collections in one panel (`src/shop/Shop.js`,
+`shop.css`): it pours out of the thing clicked — a bloom of warm light from it and a circle
+opening from the same point, its rim lit like a wet edge — while the room leans in and
+steps aside so the shelf or the rack sits beside the panel, lit (`Interior.setAside`). On a
+phone held upright it is a sheet from the bottom that can be pulled down to close.
+
+- **Views** — a collection's cards, a product (colour, size, details), the bag, and
+  checkout. Each comes in out of a blur, a little after the one before; a card's picture
+  carries over into the product's; an added piece arcs into the **Bag** button, which
+  catches it and rolls its count.
+- **Products** — sample data in `src/shop/catalog.js` (names, prices in Toman, colours,
+  sizes, shipping). The pictures are cut out of the cabin's own day painting by
+  `tools/cut-samples.py` (re-run it to change a crop) into `assets/shop/`. Real products and
+  photographs replace both; the shop only reads the fields listed at the top of the file.
+- **Bag** — `src/shop/Bag.js`, kept in this browser's localStorage (`kazmos.bag`).
+- **Checkout** — validates name, an 11-digit mobile from 09, a 10-digit postal code and the
+  address (Persian digits are accepted), remembers the address, keeps the order in this
+  browser (`kazmos.orders`) and says plainly that no payment was taken. **There is no
+  server yet:** prices are the browser's, nothing is charged, nothing is stored anywhere
+  else. The gateway and the order going to a server belong in `Shop._placeOrder`, and the
+  server must price the order itself, never trust the total sent from the page.
+- Escape, the close button, or a click on the room beside the panel closes it; a click on
+  the other hotspot switches collection.
 
 ---
 
@@ -332,14 +361,20 @@ parameters.
   are at the top of the script). Blender's export carries every texture twice, the meshes
   far denser than the shot can show, and the mountain's map at 8K; the script also cuts
   big meshes into slabs so Draco decodes them on several workers at once. The delivered
-  cabin and mountain went from 14.6 MB to 6.5 MB and decode in about a second instead of
-  over two, with the hero shot unchanged to within a few dozen pixels.
+  cabin and mountain went from 14.6 MB to 2.2 MB. They are simplified hard, because their
+  triangles were the frame's largest cost — the cabin alone drew 1.26M of them, more
+  than all the grass — and at the shot's size nothing shows it:
+      node tools/optimize-props.mjs Reference/models-original/cabin_custom.glb assets/models/cabin_custom.glb '{"model.001": 0.004, "model.002": 0.004}'
+      node tools/optimize-props.mjs Reference/models-original/mountain_custom.glb assets/models/mountain_custom.glb '{"model.001": 0.0012}'
+  cabin 2M → 172k triangles, mountain 1M → 50k.
 - **Load order** — the page builds the hill, grass, flowers and insects while the cabin
   and mountain are still decoding (`buildWorld`, then `buildProps` in `src/main.js`), and
   decodes its textures off the main thread. On a desktop it reaches its first frame in
   about 2.5 s from a local server, down from about 5.5 s. One frame of the hero shot is
   drawn behind the loader so every mesh and texture is on the GPU before the camera moves.
-- **Frame rate** — phones render at 1.5× pixel density instead of 2×, and any device that
+- **Frame rate** — phones start at 1.25× pixel density (ceiling 1.5×, floor 0.75×) and
+  draw 38% of the blades (about 70k — the original site draws 49k), 45% wider, for the same
+  cover (`PHONE_GRASS`); any device that
   cannot hold about 40 fps steps its resolution down a quarter at a time (back up when it
   has room) — `adaptResolution` in `src/main.js`. The opening runs on real time, so a slow
   device does not stretch the camera move.

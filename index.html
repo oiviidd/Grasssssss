@@ -8,6 +8,7 @@
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link id="intro-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Inter+Tight:wght@400;500&amp;display=swap">
 	<link rel="stylesheet" href="style.css">
+	<link rel="stylesheet" href="shop.css">
 </head>
 <body>
 
@@ -46,6 +47,29 @@
 			<span class="inside-back-arrow" aria-hidden="true"></span>
 			<span>Step outside</span>
 		</button>
+	</div>
+
+	<button id="bag-button" type="button" aria-label="Bag, 0 items" hidden>
+		<span class="bag-button-icon" aria-hidden="true"></span>
+		<span class="bag-button-label">Bag</span>
+		<span class="bag-button-count" aria-hidden="true"><span>0</span></span>
+	</button>
+
+	<div id="shop" hidden>
+		<span class="shop-bloom" aria-hidden="true"></span>
+		<section class="shop-sheet" role="dialog" aria-modal="false" aria-label="Shop" tabindex="-1">
+			<span class="shop-grain" aria-hidden="true"></span>
+			<span class="shop-lamp" aria-hidden="true"></span>
+			<span class="shop-rim" aria-hidden="true"></span>
+			<header class="shop-bar">
+				<span class="shop-handle" aria-hidden="true"></span>
+				<button class="shop-back" type="button" aria-label="Back"><span class="shop-arrow" aria-hidden="true"></span></button>
+				<p class="shop-crumb"></p>
+				<button class="shop-close" type="button" aria-label="Close"><span aria-hidden="true"></span></button>
+			</header>
+			<div class="shop-body"></div>
+			<footer class="shop-foot" hidden></footer>
+		</section>
 	</div>
 
 	<div id="loader">
