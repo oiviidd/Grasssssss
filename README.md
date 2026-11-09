@@ -204,6 +204,10 @@ meadow returns with the door closed — it is never seen standing open on the wa
 - The portrait set came from three separately generated pictures; sunset and night were
   warped onto day (a global scale and offset, then a smooth cubic field fitted to block
   matches on their edges) so the three line up and cross-fade without ghosting.
+  The landscape sunset and night had the same trouble (sunset sat about 24px off, more
+  toward the floor) and are warped onto the landscape day the same way, by
+  `tools/align-paintings.py <day> <painting> <out> --check`. Run it on any new painting
+  before it goes in, or the room doubles as the light changes.
 
 ## The shop
 
